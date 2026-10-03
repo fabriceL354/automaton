@@ -196,6 +196,15 @@ export class InferenceRouter {
 
     const tierRank = TIER_ORDER[tier] ?? 0;
 
+    // LOCAL OLLAMA ONLY: always prefer the configured Ollama model.
+    const localModelId = this.budget.config.inferenceModel;
+    if (localModelId) {
+      const localEntry = this.registry.get(localModelId);
+      if (localEntry?.enabled && localEntry.provider === "ollama") {
+        return localEntry;
+      }
+    }
+
     // 1. Try routing-matrix candidates
     const preference = this.getPreference(tier, taskType);
     if (preference && preference.candidates.length > 0) {

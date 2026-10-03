@@ -70,6 +70,7 @@ const logger = createLogger("loop");
 const MAX_TOOL_CALLS_PER_TURN = 10;
 const MAX_CONSECUTIVE_ERRORS = 5;
 const MAX_REPETITIVE_TURNS = 3;
+const LOCAL_OLLAMA_ONLY = true;
 
 export interface AgentLoopOptions {
   identity: AutomatonIdentity;
@@ -96,8 +97,8 @@ export async function runAgentLoop(
   const { identity, config, db, conway, inference, social, skills, policyEngine, spendTracker, onStateChange, onTurnComplete, ollamaBaseUrl } =
     options;
 
-  const builtinTools = createBuiltinTools(identity.sandboxId);
-  const installedTools = loadInstalledTools(db);
+  const builtinTools = LOCAL_OLLAMA_ONLY ? [] : createBuiltinTools(identity.sandboxId);
+  const installedTools = LOCAL_OLLAMA_ONLY ? [] : loadInstalledTools(db);
   const tools = [...builtinTools, ...installedTools];
   const toolContext: ToolContext = {
     identity,
@@ -129,7 +130,7 @@ export async function runAgentLoop(
   let orchestrator: Orchestrator | undefined;
   let workerPool: LocalWorkerPool | undefined;
 
-  if (hasTable(db.raw, "goals")) {
+  if (!LOCAL_OLLAMA_ONLY && hasTable(db.raw, "goals")) {
     try {
       planModeController = new PlanModeController(db.raw);
 
@@ -949,6 +950,13 @@ async function getFinancialState(
   db?: AutomatonDatabase,
   chainType?: string,
 ): Promise<FinancialState> {
+  if (LOCAL_OLLAMA_ONLY) {
+    return {
+      creditsCents: 0,
+      usdcBalance: 0,
+      lastChecked: new Date().toISOString(),
+    };
+  }
   let creditsCents = _lastKnownCredits;
   let usdcBalance = _lastKnownUsdc;
 

@@ -39,6 +39,7 @@ import { keccak256, toHex } from "viem";
 
 const logger = createLogger("main");
 const VERSION = "0.2.1";
+const LOCAL_OLLAMA_ONLY = true;
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -196,7 +197,7 @@ async function run(): Promise<void> {
   // Load wallet (chain-aware)
   const { account, chainIdentity, chainType: walletChainType } = await getWallet();
   const resolvedChainType = config.chainType || walletChainType || "evm";
-  const apiKey = config.conwayApiKey || loadApiKeyFromConfig();
+  const apiKey = config.conwayApiKey || loadApiKeyFromConfig() || (LOCAL_OLLAMA_ONLY ? "local-only" : undefined);
   if (!apiKey) {
     logger.error("No API key found. Run: automaton --provision");
     process.exit(1);
@@ -247,7 +248,7 @@ async function run(): Promise<void> {
 
   // Register automaton identity (one-time, immutable)
   const registrationState = db.getIdentity("conwayRegistrationStatus");
-  if (registrationState !== "registered") {
+  if (!LOCAL_OLLAMA_ONLY && registrationState !== "registered") {
     try {
       const genesisPromptHash = config.genesisPrompt
         ? keccak256(toHex(config.genesisPrompt))
@@ -302,7 +303,7 @@ async function run(): Promise<void> {
 
   // Create social client (chain-aware: pass ChainIdentity for Solana signing)
   let social: SocialClientInterface | undefined;
-  if (config.socialRelayUrl) {
+  if (!LOCAL_OLLAMA_ONLY && config.socialRelayUrl) {
     social = createSocialClient(config.socialRelayUrl, resolvedChainType === "solana" ? chainIdentity : account);
     logger.info(`[${new Date().toISOString()}] Social relay: ${config.socialRelayUrl}`);
   }
@@ -322,23 +323,23 @@ async function run(): Promise<void> {
   const skillsDir = config.skillsDir || "~/.automaton/skills";
   let skills: Skill[] = [];
   try {
-    skills = loadSkills(skillsDir, db);
+    if (!LOCAL_OLLAMA_ONLY) skills = loadSkills(skillsDir, db);
     logger.info(`[${new Date().toISOString()}] Loaded ${skills.length} skills.`);
   } catch (err: any) {
     logger.warn(`[${new Date().toISOString()}] Skills loading failed: ${err.message}`);
   }
 
   // Initialize state repo (git)
-  try {
+  if (!LOCAL_OLLAMA_ONLY) try {
     await initStateRepo(conway);
     logger.info(`[${new Date().toISOString()}] State repo initialized.`);
   } catch (err: any) {
     logger.warn(`[${new Date().toISOString()}] State repo init failed: ${err.message}`);
   }
 
-  // Bootstrap topup: buy minimum credits ($5) from USDC so the agent can start.
+  // Bootstrap topup disabled in LOCAL_OLLAMA_ONLY mode.
   // The agent decides larger topups itself via the topup_credits tool.
-  try {
+  if (!LOCAL_OLLAMA_ONLY) try {
     let bootstrapTimer: ReturnType<typeof setTimeout>;
     const bootstrapTimeout = new Promise<null>((_, reject) => {
       bootstrapTimer = setTimeout(() => reject(new Error("bootstrap topup timed out")), 15_000);
@@ -369,7 +370,7 @@ async function run(): Promise<void> {
   }
 
   // Start heartbeat daemon (Phase 1.1: DurableScheduler)
-  const heartbeat = createHeartbeatDaemon({
+  const heartbeat = LOCAL_OLLAMA_ONLY ? null : createHeartbeatDaemon({
     identity,
     config,
     heartbeatConfig,
@@ -384,13 +385,14 @@ async function run(): Promise<void> {
     },
   });
 
-  heartbeat.start();
-  logger.info(`[${new Date().toISOString()}] Heartbeat daemon started.`);
+  heartbeat?.start();
+  if (heartbeat) logger.info(`[${new Date().toISOString()}] Heartbeat daemon started.`);
+ else logger.info(`[${new Date().toISOString()}] Local-only mode: heartbeat disabled.`);
 
   // Handle graceful shutdown
   const shutdown = () => {
     logger.info(`[${new Date().toISOString()}] Shutting down...`);
-    heartbeat.stop();
+    heartbeat?.stop();
     db.setAgentState("sleeping");
     db.close();
     process.exit(0);
@@ -407,7 +409,7 @@ async function run(): Promise<void> {
     try {
       // Reload skills (may have changed since last loop)
       try {
-        skills = loadSkills(skillsDir, db);
+        if (!LOCAL_OLLAMA_ONLY) skills = loadSkills(skillsDir, db);
       } catch (error) {
         logger.error("Skills reload failed", error instanceof Error ? error : undefined);
       }
