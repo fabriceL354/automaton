@@ -34,6 +34,7 @@ import {
   toolsToInferenceFormat,
   executeTool,
 } from "./tools.js";
+import { createLocalWorkspaceTools } from "./local-tools.js";
 import { sanitizeInput } from "./injection-defense.js";
 import { getSurvivalTier } from "../conway/credits.js";
 import { getUsdcBalance } from "../conway/x402.js";
@@ -97,7 +98,7 @@ export async function runAgentLoop(
   const { identity, config, db, conway, inference, social, skills, policyEngine, spendTracker, onStateChange, onTurnComplete, ollamaBaseUrl } =
     options;
 
-  const builtinTools = LOCAL_OLLAMA_ONLY ? [] : createBuiltinTools(identity.sandboxId);
+  const builtinTools = LOCAL_OLLAMA_ONLY ? createLocalWorkspaceTools() : createBuiltinTools(identity.sandboxId);
   const installedTools = LOCAL_OLLAMA_ONLY ? [] : loadInstalledTools(db);
   const tools = [...builtinTools, ...installedTools];
   const toolContext: ToolContext = {
