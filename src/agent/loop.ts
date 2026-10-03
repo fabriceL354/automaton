@@ -98,6 +98,20 @@ export async function runAgentLoop(
   const { identity, config, db, conway, inference, social, skills, policyEngine, spendTracker, onStateChange, onTurnComplete, ollamaBaseUrl } =
     options;
 
+  if (LOCAL_OLLAMA_ONLY) {
+    const { loadLocalScoutConfig, runLocalScout } = await import("./local-runner.js");
+    const local = await loadLocalScoutConfig();
+    db.setAgentState("running");
+    onStateChange?.("running");
+    try {
+      await runLocalScout({ ...local, onEvent: message => log(config, message) });
+    } finally {
+      db.setAgentState("sleeping");
+      onStateChange?.("sleeping");
+    }
+    return;
+  }
+
   const builtinTools = LOCAL_OLLAMA_ONLY ? createLocalWorkspaceTools() : createBuiltinTools(identity.sandboxId);
   const installedTools = LOCAL_OLLAMA_ONLY ? [] : loadInstalledTools(db);
   const tools = [...builtinTools, ...installedTools];
