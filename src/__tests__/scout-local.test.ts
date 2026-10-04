@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { createServer } from "node:http";
 import path from "node:path";
 import { createLocalWorkspaceTools } from "../agent/local-tools.js";
+import * as localTools from "../agent/local-tools.js";
 import { localOllamaUrl, runLocalScout, loadLocalScoutConfig, DEFAULT_SCOUT_MODEL } from "../agent/local-runner.js";
 
 let temp: string;
@@ -73,11 +74,11 @@ describe("Scout local runtime", () => {
     await writeFile(path.join(root, "MISSION.txt"), mission);
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(reply({ tool: "read_file", path: "MISSION.txt", content: "" }))
-      .mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "Scout local opérationnel" }))
-      .mockResolvedValueOnce(reply({ tool: "finish", path: "", content: "" }));
+      .mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "Scout local opérationnel" }));
     vi.stubGlobal("fetch", fetchMock);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root });
     expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("Scout local opérationnel");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [url, request] of fetchMock.mock.calls) {
       expect(url).toBe("http://127.0.0.1:11434/api/chat");
       expect(request.redirect).toBe("error");
@@ -85,7 +86,54 @@ describe("Scout local runtime", () => {
       expect(body.model).toBe(DEFAULT_SCOUT_MODEL);
       expect(body.messages[1].content).toContain(mission);
       expect(body.messages[0].content).not.toMatch(/credits critically low/i);
+      expect(body.messages[0].content).toContain("actual, complete answer to MISSION.txt");
+      expect(body.messages[0].content).toContain("Do not write a status-only message");
+      expect(body.format.properties.tool.enum).toEqual(["list_files", "read_file", "write_file"]);
     }
+  });
+  it("succeeds on the last allowed turn and preserves the first report without another inference", async () => {
+    await writeFile(path.join(root, "MISSION.txt"), "Combien font 2 + 2 ?");
+    const events = vi.fn();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(reply({ tool: "write_file", path: "./rapport.txt", content: "2 + 2 = 4." }))
+      .mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "rapport prêt" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root, maxTurns: 1, onEvent: events });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("2 + 2 = 4.");
+    expect(events).toHaveBeenCalledWith("Scout completed: rapport.txt verified.");
+  });
+  it("retries a whitespace-only report instead of announcing success", async () => {
+    await writeFile(path.join(root, "MISSION.txt"), "Combien font 2 + 2 ?");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: " \n\t" }))
+      .mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "2 + 2 = 4." }));
+    vi.stubGlobal("fetch", fetchMock);
+    await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root, maxTurns: 2 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).messages.at(-1).content).toContain("actual answer to MISSION.txt");
+  });
+  it("rereads the report and rejects an unreadable file even when write_file claims success", async () => {
+    await writeFile(path.join(root, "MISSION.txt"), "report");
+    const original = localTools.createLocalWorkspaceTools;
+    vi.spyOn(localTools, "createLocalWorkspaceTools").mockImplementation((workspace) =>
+      original(workspace).map(tool => tool.name === "write_file"
+        ? { ...tool, execute: async () => "File written: rapport.txt" } : tool));
+    const events = vi.fn();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "report" })));
+    await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root, maxTurns: 1, onEvent: events })).rejects.toThrow("limit");
+    expect(events).not.toHaveBeenCalledWith("Scout completed: rapport.txt verified.");
+  });
+  it("does not finish for another file or a blocked write, even with an old report", async () => {
+    await writeFile(path.join(root, "MISSION.txt"), "report");
+    await writeFile(path.join(root, "rapport.txt"), "old report");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(reply({ tool: "write_file", path: "notes.txt", content: "notes" }))
+      .mockResolvedValueOnce(reply({ tool: "write_file", path: "../rapport.txt", content: "escape" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root, maxTurns: 2 })).rejects.toThrow("limit");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("old report");
   });
   it("does not call Ollama without a mission", async () => {
     const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
@@ -131,7 +179,6 @@ describe("Scout CLI integration", () => {
     const actions = [
       { tool: "read_file", path: "MISSION.txt", content: "" },
       { tool: "write_file", path: "rapport.txt", content: "Rapport du test CLI" },
-      { tool: "finish", path: "", content: "" },
     ];
     const server = createServer(async (req, res) => {
       let raw = "";
@@ -148,7 +195,7 @@ describe("Scout CLI integration", () => {
       });
       expect(stdout).toContain("rapport.txt verified");
       expect(stdout).not.toMatch(/credits|Conway|wallet/i);
-      expect(requests.map(r => r.url)).toEqual(["/api/chat", "/api/chat", "/api/chat"]);
+      expect(requests.map(r => r.url)).toEqual(["/api/chat", "/api/chat"]);
       expect(requests[0].body.messages[1].content).toContain("Mission intégration CLI");
       expect(requests[0].body.model).toBe(DEFAULT_SCOUT_MODEL);
       expect(await readFile(path.join(workspace, "rapport.txt"), "utf8")).toBe("Rapport du test CLI");

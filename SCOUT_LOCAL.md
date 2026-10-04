@@ -51,8 +51,11 @@ choisir le port local. Seules les IP loopback `127.0.0.1` et `::1` sont autoris�
 Ne pas configurer Ollama en proxy vers un service distant et ne pas utiliser de
 modèle cloud : ce runtime suppose un serveur Ollama local de confiance.
 
-Scout termine après une action `finish` seulement si `write_file` a écrit
-`rapport.txt` pendant cette exécution et si ce fichier est lisible et non vide.
+Scout termine immédiatement après une écriture réussie de `rapport.txt` :
+le runtime relit le fichier via son outil confiné et vérifie qu’il est non vide.
+Aucune action `finish` ni nouvel appel au modèle n’est nécessaire. Le prompt
+demande que le fichier contienne la réponse complète à `MISSION.txt`, plutôt
+qu’un simple message annonçant que le rapport est prêt.
 Un ancien rapport ne suffit pas. Maximum : 12 tours, 120 secondes par requête.
 Une erreur Ollama n'entraîne aucun repli vers un autre fournisseur. Si le modèle
 est absent, l'installer avec `ollama pull` puis relancer Scout.
