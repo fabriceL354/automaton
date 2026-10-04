@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { publicWebInputs, WebResearchSession } from "../scout-web/session.js";
+import { validReportContent } from "./report-validation.js";
 import { createLocalWorkspaceTools, scoutWorkspaceRoot } from "./local-tools.js";
 
 export const DEFAULT_SCOUT_MODEL = "qwen2.5:1.5b-instruct";
@@ -134,7 +135,7 @@ export async function runLocalScout(options: {
     { role: "system", content: `You are Scout. Answer MISSION.txt in its requested language. Return ONE JSON action, no extra fields or text:
 {"tool":"list_files"}
 {"tool":"read_file","path":"MISSION.txt"}
-{"tool":"write_file","content":"actual, complete answer to MISSION.txt"}
+write_file: fields tool (write_file) and content (string); path is omitted to write rapport.txt.
 {"tool":"web_search","index":0}
 {"tool":"read_search_result","index":0}
 {"tool":"read_public_url","index":0}
@@ -161,7 +162,15 @@ Follow runtime State. Read a source before reporting on a Web mission. Synthesiz
     try {
       action = parseScoutAction(content);
       if (action.tool === "web_search" || action.tool === "read_search_result" || action.tool === "read_public_url") web.indexedValue(action.tool, action.index);
-      if (action.tool === "write_file" && path.normalize(action.path ?? "rapport.txt") === "rapport.txt" && !web.canWriteReport()) throw new Error("Read a Web source before reporting");
+      if (action.tool === "write_file" && path.normalize(action.path ?? "rapport.txt") === "rapport.txt") {
+        if (!web.canWriteReport()) throw new Error("Read a Web source before reporting");
+        if (!validReportContent(action.content, mission) || !validReportContent(web.report(action.content), mission)) {
+          if (debug === "1") console.error(content);
+          options.onEvent?.("ERROR: report content rejected before writing");
+          messages.push({ role: "user", content: "ERROR: report rejected. Retry write_file with an original substantive answer to MISSION.txt based on the data read. No placeholder, copied mission or completion status." });
+          continue;
+        }
+      }
     } catch {
       if (debug === "1") console.error(content);
       options.onEvent?.("ERROR: invalid Scout action rejected before tool execution");
@@ -183,7 +192,7 @@ Follow runtime State. Read a source before reporting on a Web mission. Synthesiz
         path.normalize(action.path ?? "rapport.txt") === "rapport.txt" && result.startsWith("File written:")) {
       // Verify via the confined read tool, then return without another model call.
       const report = await execute("read_file", { path: "rapport.txt" });
-      if (report.trim() && !report.startsWith("ERROR:")) {
+      if (!report.startsWith("ERROR:") && validReportContent(report, mission)) {
         options.onEvent?.("Scout completed: rapport.txt verified.");
         return;
       }

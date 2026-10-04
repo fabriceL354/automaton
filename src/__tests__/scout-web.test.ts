@@ -244,12 +244,13 @@ describe("Scout V2 runner integration without Internet", () => {
       { tool: "read_search_result", index: 0 },
       { tool: "web_search", index: 0 },
       { tool: "read_search_result", index: 0 },
+      { tool: "write_file", content: "actual, complete answer to MISSION.txt" },
       { tool: "write_file", path: "rapport.txt", content: "Résumé public.\n\nSources\nhttps://fake.example/" },
     ];
     const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ message: { content: JSON.stringify(actions.shift()) } })));
     vi.stubGlobal("fetch", fetchMock);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root });
-    expect(fetchMock).toHaveBeenCalledTimes(7);
+    expect(fetchMock).toHaveBeenCalledTimes(8);
     for (const [url] of fetchMock.mock.calls) expect(url).toBe("http://127.0.0.1:11434/api/chat");
     expect(transport.get).toHaveBeenCalledTimes(2);
     for (const [url] of transport.get.mock.calls) expect(url.href).not.toMatch(/WORKSPACE_SECRET|DO_NOT_SEND/);

@@ -82,7 +82,7 @@ describe("Scout CPU settings", () => {
     }
   });
   it("passes defaults and the matching abort signal to Ollama", async () => {
-    await writeFile(path.join(root, "MISSION.txt"), "report");
+    await writeFile(path.join(root, "MISSION.txt"), "Write a report");
     const timeout = vi.spyOn(AbortSignal, "timeout");
     const fetchMock = vi.fn().mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "report" }));
     vi.stubGlobal("fetch", fetchMock);
@@ -97,7 +97,7 @@ describe("Scout CPU settings", () => {
     vi.stubEnv("SCOUT_NUM_CTX", "1024"); vi.stubEnv("SCOUT_NUM_PREDICT", "128"); vi.stubEnv("SCOUT_TIMEOUT_MS", "600000");
     vi.stubEnv("SCOUT_MODEL", "qwen2.5:0.5b-instruct"); vi.stubEnv("OLLAMA_BASE_URL", "");
     vi.spyOn(os, "homedir").mockReturnValue(temp);
-    await writeFile(path.join(root, "MISSION.txt"), "report");
+    await writeFile(path.join(root, "MISSION.txt"), "Write a report");
     const config = await loadLocalScoutConfig();
     const timeout = vi.spyOn(AbortSignal, "timeout");
     const fetchMock = vi.fn().mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "report" }));
@@ -115,13 +115,13 @@ describe("Scout CPU settings", () => {
   });
   it.each(["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS"])("fails before inference on invalid %s", async (name) => {
     vi.stubEnv(name, "invalid");
-    await writeFile(path.join(root, "MISSION.txt"), "report");
+    await writeFile(path.join(root, "MISSION.txt"), "Write a report");
     const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
     await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root })).rejects.toThrow(name);
     expect(fetchMock).not.toHaveBeenCalled();
   });
   it("propagates a timeout without any remote or model fallback", async () => {
-    await writeFile(path.join(root, "MISSION.txt"), "report");
+    await writeFile(path.join(root, "MISSION.txt"), "Write a report");
     const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException("request timed out", "TimeoutError"));
     vi.stubGlobal("fetch", fetchMock);
     await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root })).rejects.toThrow("timed out");
@@ -171,7 +171,7 @@ describe("Scout JSON action validation", () => {
     ...["", " ", ".", "..", "../rapport.txt", "dir/../../rapport.txt", "/tmp/rapport.txt", "rapport\0.txt"].map(file => JSON.stringify({ ...validWrite, path: file })),
   ];
   it.each(invalid)("rejects action %j before any model-directed tool execution", async (raw) => {
-    await writeFile(path.join(root, "MISSION.txt"), "report");
+    await writeFile(path.join(root, "MISSION.txt"), "Write a report");
     await writeFile(path.join(root, "rapport.txt"), "old report");
     const original = localTools.createLocalWorkspaceTools;
     const executed: string[] = [];
@@ -225,7 +225,8 @@ describe("Scout local runtime", () => {
       expect(body.model).toBe(DEFAULT_SCOUT_MODEL);
       expect(body.messages[1].content).toContain(mission);
       expect(body.messages[0].content).not.toMatch(/credits critically low/i);
-      expect(body.messages[0].content).toContain("actual, complete answer to MISSION.txt");
+      expect(body.messages[0].content).not.toContain("actual, complete answer to MISSION.txt");
+      expect(body.messages[0].content).not.toMatch(/"content"\s*:/);
       expect(body.messages[0].content).toContain("Do not write a status-only message");
       expect(body.format).toBe("json");
     }
@@ -250,10 +251,10 @@ describe("Scout local runtime", () => {
     vi.stubGlobal("fetch", fetchMock);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root, maxTurns: 2 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body).messages.at(-1).content).toContain("actual answer to MISSION.txt");
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).messages.at(-1).content).toContain("original substantive answer to MISSION.txt");
   });
   it("rereads the report and rejects an unreadable file even when write_file claims success", async () => {
-    await writeFile(path.join(root, "MISSION.txt"), "report");
+    await writeFile(path.join(root, "MISSION.txt"), "Write a report");
     const original = localTools.createLocalWorkspaceTools;
     vi.spyOn(localTools, "createLocalWorkspaceTools").mockImplementation((workspace) =>
       original(workspace).map(tool => tool.name === "write_file"
@@ -264,7 +265,7 @@ describe("Scout local runtime", () => {
     expect(events).not.toHaveBeenCalledWith("Scout completed: rapport.txt verified.");
   });
   it("does not finish for another file or a blocked write, even with an old report", async () => {
-    await writeFile(path.join(root, "MISSION.txt"), "report");
+    await writeFile(path.join(root, "MISSION.txt"), "Write a report");
     await writeFile(path.join(root, "rapport.txt"), "old report");
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(reply({ tool: "write_file", path: "notes.txt", content: "notes" }))
@@ -280,7 +281,7 @@ describe("Scout local runtime", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
   it("rejects false success, unavailable tools and invalid JSON with a finite limit", async () => {
-    await writeFile(path.join(root, "MISSION.txt"), "report");
+    await writeFile(path.join(root, "MISSION.txt"), "Write a report");
     await writeFile(path.join(root, "rapport.txt"), "old report");
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(reply({ tool: "exec", path: "", content: "curl remote" }))
@@ -292,7 +293,7 @@ describe("Scout local runtime", () => {
     expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("old report");
   });
   it("fails closed on an unavailable Ollama model", async () => {
-    await writeFile(path.join(root, "MISSION.txt"), "report");
+    await writeFile(path.join(root, "MISSION.txt"), "Write a report");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('model not found', { status: 404 })));
     await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root })).rejects.toThrow("404");
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -416,5 +417,58 @@ describe("runtime report gate", () => {
     await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root, maxTurns: 1 })).rejects.toThrow("turn limit");
     expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("Old report");
     expect(debug.mock.calls).toEqual([[raw]]);
+  });
+});
+
+describe("report content quality gate", () => {
+  it.each([
+    "", " \n\t", "actual, complete answer to MISSION.txt", "Actual, complete answer to MISSION.txt.",
+    "your actual answer to MISSION.txt", "rapport final", "rapport prêt", "Le rapport est prêt.",
+    "The report is ready.", "Mission completed!", "Research this topic", "Research   this topic\n",
+    "Sources\nhttps://example.com/", "actual, complete answer to MISSION.txt\n\nSources\nhttps://example.com/",
+  ])("refuses %j before writing, then accepts an original answer", async bad => {
+    await writeFile(path.join(root, "MISSION.txt"), "Research this topic");
+    await writeFile(path.join(root, "rapport.txt"), "Existing report");
+    const originalFactory = localTools.createLocalWorkspaceTools;
+    const written: string[] = [];
+    vi.spyOn(localTools, "createLocalWorkspaceTools").mockImplementation(workspace => originalFactory(workspace).map(tool => ({
+      ...tool, execute: async (args: Record<string, unknown>) => {
+        if (tool.name === "write_file") {
+          expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("Existing report");
+          written.push(args.content as string);
+        }
+        return (tool.execute as (args: Record<string, unknown>) => Promise<string>)(args);
+      },
+    })));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(reply({ tool: "write_file", content: bad }))
+      .mockResolvedValueOnce(reply({ tool: "write_file", content: "The source documents a two-year support period." }));
+    vi.stubGlobal("fetch", fetchMock);
+    const events = vi.fn();
+    await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root, maxTurns: 2, onEvent: events });
+    expect(events).toHaveBeenCalledWith("ERROR: report content rejected before writing");
+    expect(written).toHaveLength(1);
+    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toContain("two-year support period");
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).messages.at(-1).content).toContain("Retry write_file");
+  });
+  it("does not create a report when every answer is a placeholder", async () => {
+    await writeFile(path.join(root, "MISSION.txt"), "Research this topic");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(reply({ tool: "write_file", content: "actual, complete answer to MISSION.txt" })));
+    await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root, maxTurns: 1 })).rejects.toThrow("turn limit");
+    await expect(readFile(path.join(root, "rapport.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("report reread content validation", () => {
+  it("rejects a placeholder returned on reread despite a valid proposed answer", async () => {
+    await writeFile(path.join(root, "MISSION.txt"), "Explain the source");
+    const original = localTools.createLocalWorkspaceTools;
+    vi.spyOn(localTools, "createLocalWorkspaceTools").mockImplementation(workspace => original(workspace).map(tool => tool.name === "read_file"
+      ? { ...tool, execute: async (args: Record<string, unknown>) => args.path === "rapport.txt" ? "rapport prêt\n\nSources\nhttps://example.com/" : (tool.execute as (args: Record<string, unknown>) => Promise<string>)(args) }
+      : tool));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(reply({ tool: "write_file", content: "The documentation describes scheduled maintenance." })));
+    const events = vi.fn();
+    await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root, maxTurns: 1, onEvent: events })).rejects.toThrow("turn limit");
+    expect(events).not.toHaveBeenCalledWith("Scout completed: rapport.txt verified.");
   });
 });

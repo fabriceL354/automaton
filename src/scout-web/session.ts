@@ -1,4 +1,5 @@
 /** Outbound capabilities are fixed public inputs, never generated from local files. */
+import { reportBody } from "../agent/report-validation.js";
 import { publicHttpsUrl, SafeWebClient, WEB_LIMITS } from "./network.js";
 import { DuckDuckGoHtmlProvider, textFromHtml, type SearchProvider } from "./search.js";
 
@@ -31,7 +32,7 @@ export class WebResearchSession {
   }
   canWriteReport(): boolean { return (!this.inputs.queries.length && !this.inputs.urls.length) || this.pageRead; }
   nextStep(): string {
-    if (this.canWriteReport()) return 'State: report allowed. Write the actual answer to MISSION.txt, not a copy or status message.';
+    if (this.canWriteReport()) return 'State: report allowed. Next action must be write_file. Create an original answer to MISSION.txt based on the data read; do not copy the mission or announce completion.';
     if (this.results.length) return 'State: read a source first. Next action: {"tool":"read_search_result","index":0}';
     if (this.inputs.urls.length) return 'State: read a source first. Next action: {"tool":"read_public_url","index":0}';
     return 'State: search first. Next action: {"tool":"web_search","index":0}';
@@ -85,7 +86,7 @@ export class WebResearchSession {
   sources(): string[] { return [...this.consulted]; }
   report(content: string): string {
     // The runtime owns the Sources section; model-written citations are not trusted.
-    const body = content.replace(/(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*{1,2})?Sources(?:\*{1,2})?\s*:?[ \t]*(?:\n|$)[\s\S]*$/i, "").trim();
+    const body = reportBody(content);
     const checked = body.replace(/https?:\/\/[^\s<>"'`\])]+/gi, url =>
       this.consulted.has(url) ? url : "[URL non consultée retirée]");
     if (!checked) return ""; // Never turn an empty answer into success via Sources alone.

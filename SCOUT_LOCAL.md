@@ -98,6 +98,16 @@ vers `rapport.txt`. Le prompt compact demande de synthétiser les sources, jamai
 recopier la mission. Les Sources sont ajoutées par le runtime, et l’arrêt reste
 immédiat après relecture d’un rapport non vide.
 
+Le prompt ne présente aucune valeur d’exemple pour `content`. Après une lecture
+utile, le runtime demande `write_file` avec une réponse originale fondée sur les
+données lues. Avant écriture, puis après relecture confinée, il contrôle le corps
+du rapport sans la section Sources : texte vide, placeholders connus, copie de
+`MISSION.txt` (casse/espaces normalisés) et simples annonces de statut sont refusés.
+Un refus avant écriture préserve le rapport existant, demande un nouvel essai et
+consomme un tour. Une section Sources seule ne permet jamais le succès.
+Ces contrôles ciblent les formes connues ; ils ne garantissent pas à eux seuls
+l’exactitude factuelle ni la qualité de toute réponse originale.
+
 Pour diagnostiquer un rejet sur la machine locale, activer facultativement
 `SCOUT_DEBUG_ACTIONS=1`. Seule la réponse brute rejetée par la validation d’action
 (JSON invalide inclus, ou index/étape non autorisé) est affichée sur stderr local.
