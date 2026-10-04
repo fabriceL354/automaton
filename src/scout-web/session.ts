@@ -31,6 +31,10 @@ export class WebResearchSession {
     return `Queries (web_search index): ${JSON.stringify(this.inputs.queries.map((query, index) => ({ index, query })))}\nPublic URLs (read_public_url index): ${JSON.stringify(this.inputs.urls.map((url, index) => ({ index, url })))}\n${this.nextStep()}`;
   }
   resultCount(): number { return this.results.length; }
+  /** Return only the bounded, runtime-validated search results. */
+  resultSnapshot(): Array<{ title: string; url: string; snippet: string }> {
+    return this.results.map(result => ({ ...result }));
+  }
   canWriteReport(): boolean { return (!this.inputs.queries.length && !this.inputs.urls.length) || this.pageRead; }
   nextStep(): string {
     if (this.canWriteReport()) return 'State: report allowed. Next action must be write_file with content only; runtime writes rapport.txt. Create an original answer to MISSION.txt based on the data read; do not copy the mission or announce completion.';

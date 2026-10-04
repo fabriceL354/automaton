@@ -17,7 +17,7 @@ const call = (name: string, args: Record<string, unknown> = {}) =>
 const reply = (action: unknown) => new Response(JSON.stringify({ message: { content: JSON.stringify(action) } }), { status: 200 });
 
 beforeEach(async () => {
-  for (const name of ["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS", "SCOUT_PUBLIC_QUERIES", "SCOUT_PUBLIC_URLS", "SCOUT_DEBUG_ACTIONS", "SCOUT_SEARCH_PROVIDER", "SCOUT_SEARXNG_URL"]) vi.stubEnv(name, undefined);
+  for (const name of ["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS", "SCOUT_PUBLIC_QUERIES", "SCOUT_PUBLIC_URLS", "SCOUT_DEBUG_ACTIONS", "SCOUT_SEARCH_PROVIDER", "SCOUT_SEARXNG_URL", "SCOUT_MODE", "SCOUT_BUDGET_EUR", "SCOUT_COUNTRY", "SCOUT_CONTEXT"]) vi.stubEnv(name, undefined);
   temp = await mkdtemp(path.join(os.tmpdir(), "scout-test-"));
   root = path.join(temp, "workspace");
   await mkdir(root);

@@ -1,4 +1,4 @@
-# Scout V2.1 Report Quality
+# Scout V3 Opportunity Scout (local-only)
 
 Scout utilise Ollama local pour l’inférence et un workspace confiné pour ses
 fichiers. V2 ajoute uniquement des lectures Web publiques HTTPS. Aucun Conway,
@@ -275,6 +275,7 @@ Les commandes historiques wallet/provisionnement/setup restent bloquées.
 git diff --check
 pnpm build
 pnpm exec vitest run src/__tests__/scout-local.test.ts src/__tests__/scout-web.test.ts
+pnpm exec vitest run src/__tests__/scout-opportunity.test.ts
 ```
 
 Les tests simulent HTTP, DNS, redirections, SSRF, limites, timeouts, MIME,
@@ -345,3 +346,55 @@ des 12 appels à Ollama. Épuisement : erreur, aucun nouveau rapport écrit, rap
 précédent préservé. Le debug local affiche seulement les sorties brutes rejetées.
 Qwen2.5 1.5B, les réglages Ollama et les budgets/protections Web restent inchangés.
 Sans entrée Web, le protocole local d’actions reste disponible.
+
+## V3 — Opportunity Scout (opt-in)
+
+Le mode économique est désactivé par défaut. L’activer explicitement avec
+`SCOUT_MODE=opportunity` ; sans cette variable Scout conserve le parcours local
+ou Web V2.1. Ce mode produit deux fichiers confinés à
+`~/.automaton/scout-workspace` : `opportunities.json` (données structurées) puis
+`rapport.txt` (résumé humain). Le modèle local n’exécute aucune action : le
+runtime fait les recherches, lit automatiquement quelques pages, valide les
+données, calcule les scores et écrit les fichiers.
+
+```sh
+SCOUT_MODE=opportunity \
+SCOUT_BUDGET_EUR=100 \
+SCOUT_SEARCH_PROVIDER=duckduckgo-lite \
+SCOUT_PUBLIC_QUERIES='["services locaux sans investissement"]' \
+node dist/index.js --run
+```
+
+`SCOUT_BUDGET_EUR` est un entier positif (défaut `100`, maximum `10000`).
+`SCOUT_COUNTRY` et `SCOUT_CONTEXT` sont des indications facultatives fournies
+explicitement par l’opérateur ; Scout ne géolocalise jamais la machine et ne
+construit aucune requête supplémentaire. `SCOUT_PUBLIC_QUERIES` reste l’unique
+origine des recherches, et des `SCOUT_PUBLIC_URLS` peuvent aussi fournir des
+pages publiques approuvées. Les recherches, pages, octets, redirections,
+HTTPS, DNS et épingles réseau réutilisent strictement les budgets et contrôles
+V2. Un échec Web arrête le mode sans rapport.
+
+Après les lectures réussies, Qwen reçoit uniquement le texte borné des sources
+comme données non fiables et renvoie un JSON d’analyse sans outil ni chemin.
+Chaque opportunité doit avoir exactement les champs documentés par le runtime :
+nom, résumé, coût de démarrage, délai, temps hebdomadaire, difficulté, risque,
+potentiel de marge, scalabilité, besoins de compte/service payant, risques,
+trois premières étapes et `evidence_source_indexes` (index des sources lues,
+commençant à zéro). Les types, longueurs, scores 1–5, coûts (au plus le budget),
+index de sources et maximum de cinq opportunités sont validés avant toute
+écriture. Une analyse vide est conservée comme « aucune opportunité viable » ;
+elle ne devient pas une promesse.
+
+Le score 0–100 est calculé exclusivement par le runtime à partir du coût,
+rapidité, risque, marge, scalabilité et difficulté. Les opportunités sont triées
+déterministiquement et le résumé montre le top 3, les risques, les hypothèses et
+les données manquantes. La première expérience est plafonnée à 10 € et n’est
+jamais exécutée par Scout. Les revenus ne sont jamais garantis. `Sources` est
+ajouté par le runtime à partir des URL effectivement lues ; aucune source ou
+affirmation non reliée à un index de preuve n’est considérée comme vérifiée.
+
+Le mode n’ajoute aucun shell, réseau arbitraire, compte, authentification,
+paiement, wallet, publication, formulaire, POST externe ou agent enfant. Le seul
+POST est l’appel local à Ollama sur la boucle locale, comme en V2. Les tests V3
+simulent entièrement les réponses HTTP et Ollama et vérifient budget, validation,
+classement, sources, absence d’opportunité et échec Web.

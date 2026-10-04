@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /** Entry point for the local-only Scout branch. */
 import { loadLocalScoutConfig, runLocalScout } from "./agent/local-runner.js";
+import { runOpportunityScout, scoutMode } from "./agent/opportunity-scout.js";
 
-const VERSION = "0.2.1";
-const HELP = `Scout V2.1 Report Quality v${VERSION}
+const VERSION = "0.3.0";
+const HELP = `Scout V3 Opportunity Scout v${VERSION}
 
 Usage:
   automaton --run          Run Scout from ~/.automaton/scout-workspace/MISSION.txt
@@ -20,6 +21,10 @@ Environment:
   SCOUT_NUM_PREDICT       Output tokens: 64–2048 (default: 256)
   SCOUT_TIMEOUT_MS        Local inference timeout: 1000–1800000 ms (default: 300000)
   SCOUT_DEBUG_ACTIONS     1 prints rejected raw actions locally (default: 0)
+  SCOUT_MODE               local (default) or opportunity; no implicit fallback
+  SCOUT_BUDGET_EUR         Positive integer budget for opportunity mode (default: 100, max: 10000)
+  SCOUT_COUNTRY            Optional operator-supplied country/context (no geolocation)
+  SCOUT_CONTEXT            Optional bounded operator context (no automatic lookup)
   SCOUT_SEARCH_PROVIDER   none (default), searxng, duckduckgo-lite or duckduckgo-html; no automatic fallback
   SCOUT_SEARXNG_URL       Public HTTPS origin for explicitly selected SearXNG instance
   SCOUT_PUBLIC_QUERIES    JSON array of up to 3 explicitly public search queries
@@ -40,12 +45,17 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "-v":
-      console.log(`Scout V2.1 Report Quality v${VERSION}`);
+      console.log(`Scout V3 Opportunity Scout v${VERSION}`);
       return;
     case "--run": {
       const config = await loadLocalScoutConfig();
-      console.log(`Scout V2: ${config.model} via ${config.baseUrl}`);
-      await runLocalScout({ ...config, onEvent: message => console.log(message) });
+      const mode = scoutMode();
+      console.log(`Scout ${mode}: ${config.model} via ${config.baseUrl}`);
+      if (mode === "opportunity") {
+        await runOpportunityScout({ ...config, onEvent: message => console.log(message) });
+      } else {
+        await runLocalScout({ ...config, onEvent: message => console.log(message) });
+      }
       return;
     }
     default:
