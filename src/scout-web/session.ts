@@ -16,6 +16,8 @@ export function publicWebInputs(env: Record<string, string | undefined> = proces
 }
 
 export class WebResearchSession {
+  private results: { title: string; url: string; snippet: string }[] = [];
+  private pageRead = false;
   private searches = 0;
   private pages = 0;
   private allowedUrls: Set<string>;
@@ -25,7 +27,25 @@ export class WebResearchSession {
     this.allowedUrls = new Set(inputs.urls.map(url => publicHttpsUrl(url).href));
   }
   instructions(): string {
-    return `Approved queries: ${JSON.stringify(this.inputs.queries)}\nApproved URLs: ${JSON.stringify([...this.allowedUrls])}`;
+    return `Queries (web_search index): ${JSON.stringify(this.inputs.queries.map((query, index) => ({ index, query })))}\nPublic URLs (read_public_url index): ${JSON.stringify(this.inputs.urls.map((url, index) => ({ index, url })))}\n${this.nextStep()}`;
+  }
+  canWriteReport(): boolean { return (!this.inputs.queries.length && !this.inputs.urls.length) || this.pageRead; }
+  nextStep(): string {
+    if (this.canWriteReport()) return 'State: report allowed. Write the actual answer to MISSION.txt, not a copy or status message.';
+    if (this.results.length) return 'State: read a source first. Next action: {"tool":"read_search_result","index":0}';
+    if (this.inputs.urls.length) return 'State: read a source first. Next action: {"tool":"read_public_url","index":0}';
+    return 'State: search first. Next action: {"tool":"web_search","index":0}';
+  }
+  indexedValue(tool: "web_search" | "read_search_result" | "read_public_url", index: number): string {
+    const values = tool === "web_search" ? this.inputs.queries : tool === "read_public_url" ? this.inputs.urls : this.results.map(result => result.url);
+    if (!Number.isSafeInteger(index) || index < 0 || index >= values.length) throw new Error("Index out of bounds");
+    return values[index]!;
+  }
+  async searchIndex(index: number): Promise<string> {
+    return this.search(this.indexedValue("web_search", index));
+  }
+  async readIndex(tool: "read_search_result" | "read_public_url", index: number): Promise<string> {
+    return this.readPage(this.indexedValue(tool, index));
   }
   isQueryAllowed(query: string): boolean { return this.inputs.queries.includes(query); }
   isUrlAllowed(raw: string): boolean {
@@ -44,7 +64,8 @@ export class WebResearchSession {
         url: publicHttpsUrl(result.url).href, snippet: result.snippet.slice(0, 400) }));
       for (const result of safe) this.allowedUrls.add(result.url);
       this.consulted.add(source);
-      return JSON.stringify({ results: safe });
+      this.results.push(...safe);
+      return JSON.stringify({ results: this.results.map((result, index) => ({ index, title: result.title, snippet: result.snippet.slice(0, 200) })) });
     } catch { return "ERROR: public search unavailable, unsafe, or over limit; no paid/remote fallback. Try an operator-provided URL or explain the limitation."; }
   }
   async readPage(raw: string): Promise<string> {
@@ -57,6 +78,7 @@ export class WebResearchSession {
       const text = (page.mime === "text/html" ? textFromHtml(page.text) : page.text.trim());
       if (!text || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) return "ERROR: page contains no useful public text";
       this.consulted.add(page.url);
+      this.pageRead = true;
       return JSON.stringify({ url: page.url, text: text.slice(0, WEB_LIMITS.textChars), truncated: text.length > WEB_LIMITS.textChars });
     } catch { return "ERROR: public page refused, unavailable, timed out, or over limit"; }
   }

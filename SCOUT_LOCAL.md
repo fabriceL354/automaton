@@ -58,30 +58,49 @@ Les redirections du serveur sont vérifiées par la couche réseau.
 
 ## Outils et validation
 
-Seuls les cinq outils suivants sont acceptés. Chaque outil a son propre objet
+Seuls les six outils suivants sont acceptés. Chaque outil a son propre objet
 JSON minimal, sans champs inutilisés :
 
 ```json
 {"tool":"list_files"}
 {"tool":"read_file","path":"MISSION.txt"}
-{"tool":"write_file","path":"rapport.txt","content":"La réponse complète à la mission."}
-{"tool":"web_search","query":"Node.js official releases LTS documentation"}
-{"tool":"read_web_page","url":"https://nodejs.org/en/about/previous-releases"}
+{"tool":"write_file","content":"La réponse complète à la mission."}
+{"tool":"web_search","index":0}
+{"tool":"read_search_result","index":0}
+{"tool":"read_public_url","index":0}
 ```
 
-Chaque ligne illustre une action indépendante. Tous les champs sont obligatoires
-pour leur outil et de type chaîne. Toute propriété supplémentaire, type incorrect,
-outil inconnu ou argument invalide est refusé avant exécution. Les requêtes doivent
-correspondre exactement aux requêtes publiques approuvées ; les URLs doivent être
-approuvées ou provenir des résultats de recherche. Le texte libre, Markdown et
-les anciens objets avec des champs inutilisés ne sont jamais interprétés comme
-commandes. Ollama utilise toujours `format:"json"`, sans schéma contraint.
-Le prompt système compact présente ces cinq exemples et demande une réponse
-substantielle dans `rapport.txt`, plutôt qu’un message annonçant un rapport prêt.
+Chaque ligne illustre une action indépendante. `index` est un entier sûr positif
+ou nul, strictement inférieur au nombre d’éléments de la liste correspondante.
+Les autres champs sont des chaînes. Aucune propriété supplémentaire ni coercition
+n’est acceptée. Le runtime traduit les index en requêtes/URLs autorisées : le
+modèle ne peut fournir ni requête ni URL. Les anciens outils Web textuels sont
+refusés. Le texte libre et Markdown ne sont jamais interprétés comme commandes.
+Ollama utilise toujours `format:"json"`, sans schéma contraint.
+
+Les requêtes et URLs publiques sont numérotées au démarrage. Après chaque recherche,
+le modèle reçoit une liste courte de titres/extraits avec index ; les URLs restent
+côté runtime. Les résultats s’ajoutent à une liste stable (au maximum 15 résultats,
+avec les 3 recherches autorisées). `read_search_result` utilise cette liste ;
+`read_public_url` utilise uniquement `SCOUT_PUBLIC_URLS`.
+
+Le runtime indique l’étape suivante après chaque outil ou rejet. Si des entrées
+Web sont fournies, aucune écriture de `rapport.txt` n’est autorisée avant la lecture
+réussie d’une page contenant du texte utile. Une recherche seule, une erreur ou une
+page vide ne débloque pas le rapport. Aucun rapport de remplacement n’est écrit
+si le Web échoue ; la limite de 12 tours finit l’exécution en erreur. Sans entrée
+Web, le rapport local reste autorisé. Un ancien rapport ne satisfait pas ce garde.
+
+`write_file` sans `path` écrit exclusivement `rapport.txt`. Le format explicite
+`{"tool":"write_file","path":"notes.txt","content":"texte"}` reste accepté pour
+les fichiers confinés ; le garde du rapport s’applique aussi à tout chemin normalisé
+vers `rapport.txt`. Le prompt compact demande de synthétiser les sources, jamais de
+recopier la mission. Les Sources sont ajoutées par le runtime, et l’arrêt reste
+immédiat après relecture d’un rapport non vide.
 
 Pour diagnostiquer un rejet sur la machine locale, activer facultativement
 `SCOUT_DEBUG_ACTIONS=1`. Seule la réponse brute rejetée par la validation d’action
-(JSON invalide inclus, ou requête/URL non autorisée) est affichée sur stderr local.
+(JSON invalide inclus, ou index/étape non autorisé) est affichée sur stderr local.
 Les actions acceptées ne sont pas affichées par ce diagnostic. Aucun fichier de
 journal, appel réseau ni journal externe n’est ajouté. Le texte affiché peut
 contenir du contenu proposé par le modèle. Par défaut le diagnostic est désactivé

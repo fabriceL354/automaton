@@ -179,8 +179,8 @@ describe("Scout V2 search, extraction and capabilities", () => {
     const transport = fake(reply(htmlResult, { "content-type": "text/html" }), reply("actual article"));
     const session = new WebResearchSession({ queries: ["public"], urls: [] }, new SafeWebClient(transport));
     const search = JSON.parse(await session.search("public"));
-    expect(search.results[0].url).toBe("https://example.com/article");
-    expect(JSON.parse(await session.readPage(search.results[0].url)).text).toBe("actual article");
+    expect(search.results[0].index).toBe(0);
+    expect(JSON.parse(await session.readIndex("read_search_result", search.results[0].index)).text).toBe("actual article");
     const report = session.report("Résumé https://invented.example/fake\n\nSources\n- https://invented.example/fake");
     expect(report).not.toContain("invented.example");
     expect(report).toContain("Sources\n- https://html.duckduckgo.com/html/?q=public\n- https://example.com/article");
@@ -238,21 +238,66 @@ describe("Scout V2 runner integration without Internet", () => {
     const original = sessionModule.WebResearchSession;
     vi.spyOn(sessionModule, "WebResearchSession").mockImplementation(inputs => new original(inputs, new SafeWebClient(transport)));
     const actions = [
+      { tool: "write_file", content: "Premature report" },
       { tool: "read_file", path: "secret.txt" },
-      { tool: "web_search", query: "WORKSPACE_SECRET" },
-      { tool: "read_web_page", url: "https://unapproved.example/" },
-      { tool: "web_search", query: "public topic" },
-      { tool: "read_web_page", url: "https://example.com/article" },
+      { tool: "web_search", index: 99 },
+      { tool: "read_search_result", index: 0 },
+      { tool: "web_search", index: 0 },
+      { tool: "read_search_result", index: 0 },
       { tool: "write_file", path: "rapport.txt", content: "Résumé public.\n\nSources\nhttps://fake.example/" },
     ];
     const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ message: { content: JSON.stringify(actions.shift()) } })));
     vi.stubGlobal("fetch", fetchMock);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root });
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
     for (const [url] of fetchMock.mock.calls) expect(url).toBe("http://127.0.0.1:11434/api/chat");
     expect(transport.get).toHaveBeenCalledTimes(2);
     for (const [url] of transport.get.mock.calls) expect(url.href).not.toMatch(/WORKSPACE_SECRET|DO_NOT_SEND/);
     const report = await readFile(path.join(root, "rapport.txt"), "utf8");
     expect(report).toContain("Résumé public."); expect(report).toContain("https://example.com/article"); expect(report).not.toContain("fake.example");
+  });
+});
+
+describe("indexed Web state machine", () => {
+  it.each([-1, 0.5, "0", null, {}, [], Number.MAX_SAFE_INTEGER + 1])("rejects invalid index %j", index => {
+    for (const tool of ["web_search", "read_search_result", "read_public_url"]) {
+      expect(() => parseScoutAction(JSON.stringify({ tool, index }))).toThrow();
+    }
+  });
+  it("requires a useful page after search, preserves stable results and bounds", async () => {
+    const transport = fake(reply(htmlResult, { "content-type": "text/html" }), reply("actual source"));
+    const session = new WebResearchSession({ queries: ["public"], urls: [] }, new SafeWebClient(transport));
+    expect(session.canWriteReport()).toBe(false);
+    expect(session.nextStep()).toContain('"web_search"');
+    for (const tool of ["web_search", "read_search_result", "read_public_url"] as const) {
+      expect(() => session.indexedValue(tool, 99)).toThrow();
+    }
+    expect(() => session.indexedValue("read_search_result", 0)).toThrow();
+    const results = JSON.parse(await session.searchIndex(0)).results;
+    expect(results).toEqual([{ index: 0, title: "Example & title", snippet: "Public snippet" }]);
+    expect(session.canWriteReport()).toBe(false);
+    expect(session.nextStep()).toContain('"read_search_result"');
+    expect(() => session.indexedValue("read_search_result", 1)).toThrow();
+    expect(await session.readIndex("read_search_result", 0)).toContain("actual source");
+    expect(session.canWriteReport()).toBe(true);
+    expect(session.nextStep()).toContain("report allowed");
+    expect(session.report("Summary")).toContain("https://example.com/article");
+    expect(transport.get).toHaveBeenCalledTimes(2);
+  });
+  it("allows local reports, but refuses Web reports after failed or empty reads", async () => {
+    expect(new WebResearchSession({ queries: [], urls: [] }).canWriteReport()).toBe(true);
+    const transport = fake(reply(""), reply("binary", { "content-type": "application/octet-stream" }));
+    const session = new WebResearchSession({ queries: [], urls: ["https://example.com/"] }, new SafeWebClient(transport));
+    expect(session.nextStep()).toContain('"read_public_url"');
+    expect(await session.readIndex("read_public_url", 0)).toMatch(/^ERROR:/);
+    expect(session.canWriteReport()).toBe(false);
+    expect(await session.readIndex("read_public_url", 0)).toMatch(/^ERROR:/);
+    expect(session.canWriteReport()).toBe(false);
+  });
+  it("reads an indexed public URL and unlocks reporting", async () => {
+    const session = new WebResearchSession({ queries: [], urls: ["https://example.com/"] }, new SafeWebClient(fake(reply("source"))));
+    expect(await session.readIndex("read_public_url", 0)).toContain("source");
+    expect(session.canWriteReport()).toBe(true);
+    expect(session.sources()).toEqual(["https://example.com/"]);
   });
 });
