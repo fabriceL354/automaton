@@ -17,7 +17,7 @@ const call = (name: string, args: Record<string, unknown> = {}) =>
 const reply = (action: unknown) => new Response(JSON.stringify({ message: { content: JSON.stringify(action) } }), { status: 200 });
 
 beforeEach(async () => {
-  for (const name of ["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS", "SCOUT_PUBLIC_QUERIES", "SCOUT_PUBLIC_URLS"]) vi.stubEnv(name, undefined);
+  for (const name of ["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS", "SCOUT_PUBLIC_QUERIES", "SCOUT_PUBLIC_URLS", "SCOUT_DEBUG_ACTIONS"]) vi.stubEnv(name, undefined);
   temp = await mkdtemp(path.join(os.tmpdir(), "scout-test-"));
   root = path.join(temp, "workspace");
   await mkdir(root);
@@ -133,8 +133,8 @@ describe("Scout CPU settings", () => {
 
 describe("Scout JSON action validation", () => {
   it.each([
-    { tool: "list_files", path: "", content: "" },
-    { tool: "read_file", path: "MISSION.txt", content: "" },
+    { tool: "list_files" },
+    { tool: "read_file", path: "MISSION.txt" },
     { tool: "write_file", path: "./rapport.txt", content: "2 + 2 = 4." },
   ])("accepts the exact contract for $tool", (action) => {
     expect(parseScoutAction(JSON.stringify(action))).toEqual(action);
@@ -212,7 +212,7 @@ describe("Scout local runtime", () => {
     const mission = "Lire MISSION.txt et rédiger un rapport local.";
     await writeFile(path.join(root, "MISSION.txt"), mission);
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(reply({ tool: "read_file", path: "MISSION.txt", content: "" }))
+      .mockResolvedValueOnce(reply({ tool: "read_file", path: "MISSION.txt" }))
       .mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "Scout local opérationnel" }));
     vi.stubGlobal("fetch", fetchMock);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root });
@@ -316,7 +316,7 @@ describe("Scout CLI integration", () => {
     await writeFile(path.join(workspace, "MISSION.txt"), "Mission intégration CLI");
     const requests: Array<{ url: string; body: any }> = [];
     const actions = [
-      { tool: "read_file", path: "MISSION.txt", content: "" },
+      { tool: "read_file", path: "MISSION.txt" },
       { tool: "write_file", path: "rapport.txt", content: "Rapport du test CLI" },
     ];
     const server = createServer(async (req, res) => {
@@ -349,5 +349,50 @@ describe("Scout CLI integration", () => {
     await expect(promisify(execFile)(process.execPath, ["--import", "tsx", "src/index.ts", "--provision"], {
       env: { ...process.env, HOME: temp }, timeout: 10_000,
     })).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("disabled") });
+  });
+});
+
+describe("compact tool contracts and local diagnostics", () => {
+  const actions = [
+    { tool: "list_files" },
+    { tool: "read_file", path: "MISSION.txt" },
+    { tool: "write_file", path: "rapport.txt", content: "answer" },
+    { tool: "web_search", query: "public topic" },
+    { tool: "read_web_page", url: "https://example.com/article" },
+  ];
+  it.each(actions)("accepts only the exact fields for $tool", action => {
+    expect(parseScoutAction(JSON.stringify(action))).toEqual(action);
+    expect(() => parseScoutAction(JSON.stringify({ ...action, extra: "ignored?" }))).toThrow();
+    for (const key of Object.keys(action)) {
+      expect(() => parseScoutAction(JSON.stringify({ ...action, [key]: null }))).toThrow();
+      const missing = { ...action } as Record<string, unknown>;
+      delete missing[key];
+      expect(() => parseScoutAction(JSON.stringify(missing))).toThrow();
+    }
+  });
+  it.each(["", " ", "public\nsecret", "x".repeat(501)])("rejects malformed queries", query => {
+    expect(() => parseScoutAction(JSON.stringify({ tool: "web_search", query }))).toThrow();
+  });
+  it.each([undefined, "0", "1"])("prints only rejected raw actions when debug is %s", async debug => {
+    vi.stubEnv("SCOUT_DEBUG_ACTIONS", debug);
+    await writeFile(path.join(root, "MISSION.txt"), "Answer this mission");
+    const raw = '{"tool":"list_files","content":"unexpected"}';
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    const events = vi.fn();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: { content: raw } })))
+      .mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "Answer" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root, maxTurns: 2, onEvent: events });
+    if (debug === "1") expect(diagnostic.mock.calls).toEqual([[raw]]);
+    else expect(diagnostic).not.toHaveBeenCalled();
+    expect(events.mock.calls.flat()).not.toContain(raw);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).messages[0].content.length).toBeLessThan(1000);
+  });
+  it.each(["", "true", "2", " 1"])("rejects invalid debug setting %s before inference", async debug => {
+    vi.stubEnv("SCOUT_DEBUG_ACTIONS", debug);
+    const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+    await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root })).rejects.toThrow("SCOUT_DEBUG_ACTIONS");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

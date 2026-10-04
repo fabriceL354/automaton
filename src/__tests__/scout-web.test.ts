@@ -210,12 +210,12 @@ describe("Scout V2 search, extraction and capabilities", () => {
     expect(session.sources()).toEqual([]);
   });
   it.each([
-    { tool: "web_search", path: "public", content: "secret" },
-    { tool: "read_web_page", path: "http://example.com", content: "" },
-    { tool: "read_web_page", path: "https://127.0.0.1", content: "" },
-    { tool: "web_search", path: "public", content: "", method: "POST" },
-    { tool: "web_search", path: "public", content: "", headers: { Authorization: "secret" } },
-    { tool: "read_web_page", path: "https://example.com", content: "", cookie: "secret" },
+    { tool: "web_search", query: "public", content: "secret" },
+    { tool: "read_web_page", url: "http://example.com" },
+    { tool: "read_web_page", url: "https://127.0.0.1" },
+    { tool: "web_search", query: "public", method: "POST" },
+    { tool: "web_search", query: "public", headers: { Authorization: "secret" } },
+    { tool: "read_web_page", url: "https://example.com", cookie: "secret" },
   ])("rejects malformed Web action $tool", action => {
     expect(() => parseScoutAction(JSON.stringify(action))).toThrow();
   });
@@ -226,7 +226,7 @@ describe("Scout V2 runner integration without Internet", () => {
   beforeEach(async () => {
     temp = await mkdtemp(path.join(os.tmpdir(), "scout-v2-"));
     await mkdir(path.join(temp, "workspace"));
-    for (const name of ["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS", "SCOUT_PUBLIC_QUERIES", "SCOUT_PUBLIC_URLS"]) vi.stubEnv(name, undefined);
+    for (const name of ["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS", "SCOUT_PUBLIC_QUERIES", "SCOUT_PUBLIC_URLS", "SCOUT_DEBUG_ACTIONS"]) vi.stubEnv(name, undefined);
   });
   afterEach(async () => { await rm(temp, { recursive: true, force: true }); });
   it("uses the two Web tools, synthesizes, appends verified Sources and stops immediately", async () => {
@@ -238,16 +238,17 @@ describe("Scout V2 runner integration without Internet", () => {
     const original = sessionModule.WebResearchSession;
     vi.spyOn(sessionModule, "WebResearchSession").mockImplementation(inputs => new original(inputs, new SafeWebClient(transport)));
     const actions = [
-      { tool: "read_file", path: "secret.txt", content: "" },
-      { tool: "web_search", path: "WORKSPACE_SECRET", content: "" },
-      { tool: "web_search", path: "public topic", content: "" },
-      { tool: "read_web_page", path: "https://example.com/article", content: "" },
+      { tool: "read_file", path: "secret.txt" },
+      { tool: "web_search", query: "WORKSPACE_SECRET" },
+      { tool: "read_web_page", url: "https://unapproved.example/" },
+      { tool: "web_search", query: "public topic" },
+      { tool: "read_web_page", url: "https://example.com/article" },
       { tool: "write_file", path: "rapport.txt", content: "Résumé public.\n\nSources\nhttps://fake.example/" },
     ];
     const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ message: { content: JSON.stringify(actions.shift()) } })));
     vi.stubGlobal("fetch", fetchMock);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root });
-    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
     for (const [url] of fetchMock.mock.calls) expect(url).toBe("http://127.0.0.1:11434/api/chat");
     expect(transport.get).toHaveBeenCalledTimes(2);
     for (const [url] of transport.get.mock.calls) expect(url.href).not.toMatch(/WORKSPACE_SECRET|DO_NOT_SEND/);

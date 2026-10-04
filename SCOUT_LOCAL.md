@@ -58,30 +58,34 @@ Les redirections du serveur sont vérifiées par la couche réseau.
 
 ## Outils et validation
 
-Seuls les cinq outils suivants sont acceptés. Chaque action est un objet JSON
-avec exactement `tool`, `path`, `content`, tous de type chaîne. Les propriétés
-supplémentaires, types incorrects, outils inconnus et arguments invalides sont
-refusés avant toute exécution.
-
-| Outil | `path` | `content` |
-| --- | --- | --- |
-| `list_files` | Vide | Vide |
-| `read_file` | Chemin relatif dans le workspace | Vide |
-| `write_file` | Chemin relatif dans le workspace | Texte à écrire |
-| `web_search` | Une requête publique exacte déclarée au démarrage | Vide |
-| `read_web_page` | Une URL HTTPS approuvée ou issue des résultats de recherche | Vide |
+Seuls les cinq outils suivants sont acceptés. Chaque outil a son propre objet
+JSON minimal, sans champs inutilisés :
 
 ```json
-{"tool":"web_search","path":"Node.js official releases LTS documentation","content":""}
+{"tool":"list_files"}
+{"tool":"read_file","path":"MISSION.txt"}
+{"tool":"write_file","path":"rapport.txt","content":"La réponse complète à la mission."}
+{"tool":"web_search","query":"Node.js official releases LTS documentation"}
+{"tool":"read_web_page","url":"https://nodejs.org/en/about/previous-releases"}
 ```
 
-```json
-{"tool":"read_web_page","path":"https://nodejs.org/en/about/previous-releases","content":""}
-```
+Chaque ligne illustre une action indépendante. Tous les champs sont obligatoires
+pour leur outil et de type chaîne. Toute propriété supplémentaire, type incorrect,
+outil inconnu ou argument invalide est refusé avant exécution. Les requêtes doivent
+correspondre exactement aux requêtes publiques approuvées ; les URLs doivent être
+approuvées ou provenir des résultats de recherche. Le texte libre, Markdown et
+les anciens objets avec des champs inutilisés ne sont jamais interprétés comme
+commandes. Ollama utilise toujours `format:"json"`, sans schéma contraint.
+Le prompt système compact présente ces cinq exemples et demande une réponse
+substantielle dans `rapport.txt`, plutôt qu’un message annonçant un rapport prêt.
 
-```json
-{"tool":"write_file","path":"rapport.txt","content":"La synthèse demandée, avec ses limites."}
-```
+Pour diagnostiquer un rejet sur la machine locale, activer facultativement
+`SCOUT_DEBUG_ACTIONS=1`. Seule la réponse brute rejetée par la validation d’action
+(JSON invalide inclus, ou requête/URL non autorisée) est affichée sur stderr local.
+Les actions acceptées ne sont pas affichées par ce diagnostic. Aucun fichier de
+journal, appel réseau ni journal externe n’est ajouté. Le texte affiché peut
+contenir du contenu proposé par le modèle. Par défaut le diagnostic est désactivé
+(variable absente ou `0`) ; toute autre valeur que `0` ou `1` est refusée.
 
 Le workspace reste `~/.automaton/scout-workspace`. Chemins absolus, sorties du
 workspace, liens symboliques et fichiers avec plusieurs liens physiques sont
