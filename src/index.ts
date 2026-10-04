@@ -16,6 +16,9 @@ Install the model with: ollama pull qwen2.5:1.5b-instruct
 Environment:
   SCOUT_MODEL             Locally installed model (default: qwen2.5:1.5b-instruct)
   OLLAMA_BASE_URL          Loopback Ollama URL (default: http://127.0.0.1:11434)
+  SCOUT_NUM_CTX           Context tokens: 512–8192 (default: 2048)
+  SCOUT_NUM_PREDICT       Output tokens: 64–2048 (default: 512)
+  SCOUT_TIMEOUT_MS        Request timeout: 1000–1800000 ms (default: 300000)
 `;
 
 async function main(): Promise<void> {

@@ -7,7 +7,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { createLocalWorkspaceTools } from "../agent/local-tools.js";
 import * as localTools from "../agent/local-tools.js";
-import { localOllamaUrl, runLocalScout, loadLocalScoutConfig, DEFAULT_SCOUT_MODEL } from "../agent/local-runner.js";
+import { localOllamaUrl, runLocalScout, loadLocalScoutConfig, DEFAULT_SCOUT_MODEL, loadLocalScoutSettings } from "../agent/local-runner.js";
 
 let temp: string;
 let root: string;
@@ -17,6 +17,7 @@ const call = (name: string, args: Record<string, unknown> = {}) =>
 const reply = (action: unknown) => new Response(JSON.stringify({ message: { content: JSON.stringify(action) } }), { status: 200 });
 
 beforeEach(async () => {
+  for (const name of ["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS"]) vi.stubEnv(name, undefined);
   temp = await mkdtemp(path.join(os.tmpdir(), "scout-test-"));
   root = path.join(temp, "workspace");
   await mkdir(root);
@@ -58,6 +59,75 @@ describe("Scout local workspace security", () => {
     expect(await call("write_file", { path: "a", content: "a".repeat(128 * 1024 + 1) })).toMatch(/^ERROR:/);
     await writeFile(path.join(root, "large"), "a".repeat(128 * 1024 + 1));
     expect(await call("read_file", { path: "large" })).toMatch(/^ERROR:/);
+  });
+});
+
+describe("Scout CPU settings", () => {
+  it("defaults to 2048 context tokens, 512 output tokens and 300 seconds", () => {
+    expect(loadLocalScoutSettings({})).toEqual({ numCtx: 2048, numPredict: 512, timeoutMs: 300_000 });
+  });
+  it.each([
+    ["SCOUT_NUM_CTX", "numCtx", 512, 8192],
+    ["SCOUT_NUM_PREDICT", "numPredict", 64, 2048],
+    ["SCOUT_TIMEOUT_MS", "timeoutMs", 1000, 1_800_000],
+  ] as const)("accepts both inclusive bounds for %s", (name, key, min, max) => {
+    expect(loadLocalScoutSettings({ [name]: String(min) })[key]).toBe(min);
+    expect(loadLocalScoutSettings({ [name]: String(max) })[key]).toBe(max);
+    expect(() => loadLocalScoutSettings({ [name]: String(min - 1) })).toThrow(name);
+    expect(() => loadLocalScoutSettings({ [name]: String(max + 1) })).toThrow(name);
+  });
+  it.each(["", " ", " 2048", "2048 ", "2048\n", "2048\r\n", "\t2048", "１２３４", "0", "-1", "+2048", "2048.0", "2e3", "0x800", "02048", "2048junk", "NaN", "Infinity", "9007199254740992"])("rejects noncanonical or unsafe value %j for every setting", (raw) => {
+    for (const name of ["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS"]) {
+      expect(() => loadLocalScoutSettings({ [name]: raw })).toThrow(name);
+    }
+  });
+  it("passes defaults and the matching abort signal to Ollama", async () => {
+    await writeFile(path.join(root, "MISSION.txt"), "report");
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const fetchMock = vi.fn().mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "report" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root });
+    const request = fetchMock.mock.calls[0][1];
+    expect(JSON.parse(request.body).options).toEqual({ temperature: 0, num_ctx: 2048, num_predict: 512 });
+    expect(timeout).toHaveBeenCalledTimes(1);
+    expect(timeout).toHaveBeenCalledWith(300_000);
+    expect(request.signal).toBe(timeout.mock.results[0].value);
+  });
+  it("passes env overrides and the fast local model unchanged, then stops after the report", async () => {
+    vi.stubEnv("SCOUT_NUM_CTX", "1024"); vi.stubEnv("SCOUT_NUM_PREDICT", "256"); vi.stubEnv("SCOUT_TIMEOUT_MS", "600000");
+    vi.stubEnv("SCOUT_MODEL", "qwen2.5:0.5b-instruct"); vi.stubEnv("OLLAMA_BASE_URL", "");
+    vi.spyOn(os, "homedir").mockReturnValue(temp);
+    await writeFile(path.join(root, "MISSION.txt"), "report");
+    const config = await loadLocalScoutConfig();
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const fetchMock = vi.fn().mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "report" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await runLocalScout({ ...config, root });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const request = fetchMock.mock.calls[0][1];
+    const body = JSON.parse(request.body);
+    expect(body.model).toBe("qwen2.5:0.5b-instruct");
+    expect(body.options).toEqual({ temperature: 0, num_ctx: 1024, num_predict: 256 });
+    expect(timeout).toHaveBeenCalledTimes(1);
+    expect(timeout).toHaveBeenCalledWith(600_000);
+    expect(request.signal).toBe(timeout.mock.results[0].value);
+    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("report");
+  });
+  it.each(["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS"])("fails before inference on invalid %s", async (name) => {
+    vi.stubEnv(name, "invalid");
+    await writeFile(path.join(root, "MISSION.txt"), "report");
+    const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+    await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root })).rejects.toThrow(name);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("propagates a timeout without any remote or model fallback", async () => {
+    await writeFile(path.join(root, "MISSION.txt"), "report");
+    const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException("request timed out", "TimeoutError"));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root })).rejects.toThrow("timed out");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:11434/api/chat");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).model).toBe(DEFAULT_SCOUT_MODEL);
   });
 });
 
@@ -198,6 +268,7 @@ describe("Scout CLI integration", () => {
       expect(requests.map(r => r.url)).toEqual(["/api/chat", "/api/chat"]);
       expect(requests[0].body.messages[1].content).toContain("Mission intégration CLI");
       expect(requests[0].body.model).toBe(DEFAULT_SCOUT_MODEL);
+      expect(requests[0].body.options).toEqual({ temperature: 0, num_ctx: 2048, num_predict: 512 });
       expect(await readFile(path.join(workspace, "rapport.txt"), "utf8")).toBe("Rapport du test CLI");
     } finally {
       server.closeAllConnections();

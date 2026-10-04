@@ -1,4 +1,4 @@
-# Scout V1 locale
+# Scout V1.1 locale
 
 Cette branche exécute Scout uniquement avec Ollama local. `--run` ne démarre
 ni portefeuille, ni Conway, ni paiement, ni heartbeat, ni agent secondaire.
@@ -38,8 +38,38 @@ Qwen 2.5 est conservée ; un ancien choix Gemma/cloud est remplacé par ce défa
 Pour choisir explicitement un autre modèle **déjà installé localement** :
 
 ```sh
-SCOUT_MODEL=qwen2.5:3b-instruct node dist/index.js --run
+ollama pull qwen2.5:0.5b-instruct
+SCOUT_MODEL=qwen2.5:0.5b-instruct node dist/index.js --run
 ```
+
+## Réglages pour une petite machine CPU
+
+Les valeurs par défaut réduisent le contexte et la longueur de génération pour
+une machine CPU avec environ 3 Go de RAM. Le modèle principal reste
+`qwen2.5:1.5b-instruct` ; le choix rapide `qwen2.5:0.5b-instruct` reste explicite,
+sans changement automatique de modèle en cas d’erreur.
+
+| Variable | Défaut | Plage autorisée | Effet |
+| --- | ---: | ---: | --- |
+| `SCOUT_NUM_CTX` | 2048 | 512 à 8192 | Taille du contexte Ollama en tokens |
+| `SCOUT_NUM_PREDICT` | 512 | 64 à 2048 | Maximum de tokens générés par requête, JSON compris |
+| `SCOUT_TIMEOUT_MS` | 300000 | 1000 à 1800000 | Délai maximum par requête en millisecondes |
+
+```sh
+SCOUT_NUM_CTX=2048 SCOUT_NUM_PREDICT=512 SCOUT_TIMEOUT_MS=300000 node dist/index.js --run
+```
+
+Une variable absente utilise le défaut. Une variable définie doit contenir un
+entier décimal dans la plage indiquée, sans espaces, signe, décimales, exposant
+ou zéro initial. Une valeur vide ou invalide arrête Scout avant tout appel
+Ollama ; aucune correction silencieuse n’est appliquée.
+
+Garder les missions, fichiers consultés et rapports courts avec ces défauts.
+Le contexte inclut le prompt, la mission et l’historique ; les 512 tokens de
+sortie incluent l’enveloppe JSON de l’action. Augmenter les limites pour une
+mission plus longue consomme davantage de mémoire et de temps. Ces réglages
+ne garantissent pas que le modèle tiendra dans 3 Go : cela dépend aussi de
+sa quantification, d’Ollama et de la mémoire utilisée par le système.
 
 Les actions utilisent le format JSON structuré d'Ollama, puis sont validées et
 exécutées par le runtime. Cela évite de dépendre du support natif des tools par
@@ -56,7 +86,8 @@ le runtime relit le fichier via son outil confiné et vérifie qu’il est non v
 Aucune action `finish` ni nouvel appel au modèle n’est nécessaire. Le prompt
 demande que le fichier contienne la réponse complète à `MISSION.txt`, plutôt
 qu’un simple message annonçant que le rapport est prêt.
-Un ancien rapport ne suffit pas. Maximum : 12 tours, 120 secondes par requête.
+Un ancien rapport ne suffit pas. Maximum : 12 tours ; timeout par requête de
+300 secondes par défaut, réglable avec `SCOUT_TIMEOUT_MS`.
 Une erreur Ollama n'entraîne aucun repli vers un autre fournisseur. Si le modèle
 est absent, l'installer avec `ollama pull` puis relancer Scout.
 
@@ -76,4 +107,5 @@ pnpm exec vitest run src/__tests__/scout-local.test.ts
 
 Les tests utilisent un Ollama simulé : ils vérifient le parcours mission → outils
 → rapport, le confinement, l'absence de réussite fictive et l'absence de repli
-réseau. Ils ne mesurent pas la qualité du vrai modèle sur le matériel utilisateur.
+réseau, ainsi que les défauts, bornes et valeurs invalides des réglages CPU.
+Ils ne mesurent pas la qualité du vrai modèle sur le matériel utilisateur.

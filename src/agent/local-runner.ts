@@ -6,6 +6,34 @@ import { createLocalWorkspaceTools, scoutWorkspaceRoot } from "./local-tools.js"
 
 export const DEFAULT_SCOUT_MODEL = "qwen2.5:1.5b-instruct";
 
+const SCOUT_SETTING_LIMITS = {
+  SCOUT_NUM_CTX: { default: 2048, min: 512, max: 8192 },
+  SCOUT_NUM_PREDICT: { default: 512, min: 64, max: 2048 },
+  SCOUT_TIMEOUT_MS: { default: 300_000, min: 1000, max: 1_800_000 },
+} as const;
+
+export function loadLocalScoutSettings(env: Record<string, string | undefined> = process.env): {
+  numCtx: number; numPredict: number; timeoutMs: number;
+} {
+  const readSetting = (name: keyof typeof SCOUT_SETTING_LIMITS): number => {
+    const limits = SCOUT_SETTING_LIMITS[name];
+    const raw = env[name];
+    if (raw === undefined) return limits.default;
+    const value = Number(raw);
+    // No empty values, whitespace, signs, fractions, exponents or silent clamping.
+    if (!/^[1-9][0-9]*$/.test(raw) || raw !== String(value) || !Number.isSafeInteger(value) ||
+        value < limits.min || value > limits.max) {
+      throw new Error(`${name} must be a decimal integer between ${limits.min} and ${limits.max}`);
+    }
+    return value;
+  };
+  return {
+    numCtx: readSetting("SCOUT_NUM_CTX"),
+    numPredict: readSetting("SCOUT_NUM_PREDICT"),
+    timeoutMs: readSetting("SCOUT_TIMEOUT_MS"),
+  };
+}
+
 export function localOllamaUrl(value = "http://127.0.0.1:11434"): string {
   const url = new URL(value);
   if (!["http:", "https:"].includes(url.protocol) ||
@@ -52,6 +80,7 @@ export async function runLocalScout(options: {
   onEvent?: (message: string) => void;
 }): Promise<void> {
   const baseUrl = localOllamaUrl(options.baseUrl);
+  const settings = loadLocalScoutSettings();
   const tools = createLocalWorkspaceTools(options.root ?? scoutWorkspaceRoot());
   // These tools never access ToolContext. Bind only their single args parameter.
   const execute = (name: string, args: Record<string, unknown>) => {
@@ -75,10 +104,10 @@ The runtime automatically reads and checks rapport.txt after write_file and stop
   if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 12) throw new Error("maxTurns must be between 1 and 12");
   for (let turn = 0; turn < maxTurns; turn++) {
     const response = await fetch(`${baseUrl}/api/chat`, {
-      method: "POST", redirect: "error", signal: AbortSignal.timeout(120_000),
+      method: "POST", redirect: "error", signal: AbortSignal.timeout(settings.timeoutMs),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: options.model, messages, stream: false, format: ACTION_SCHEMA,
-        options: { temperature: 0, num_predict: 2048, num_ctx: 8192 } }),
+        options: { temperature: 0, num_predict: settings.numPredict, num_ctx: settings.numCtx } }),
     });
     if (!response.ok) throw new Error(`Local Ollama error ${response.status}: ${await response.text()}`);
     const data = await response.json() as { message?: { content?: string }; error?: string };
