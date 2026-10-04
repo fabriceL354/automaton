@@ -241,8 +241,8 @@ describe("Scout V2 runner integration without Internet", () => {
     vi.spyOn(sessionModule, "WebResearchSession").mockImplementation(inputs => new original(inputs, new SafeWebClient(transport)));
     const actions = [
       { tool: "write_file", path: "MISSION.txt", content: "Wrong destination" },
-      { tool: "write_file", content: "actual, complete answer to MISSION.txt" },
-      { tool: "write_file", content: "Résumé public.\n\nSources\nhttps://fake.example/" },
+      { content: "actual, complete answer to MISSION.txt" },
+      { content: "Résumé public.\n\nSources\nhttps://fake.example/" },
     ];
     const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ message: { content: JSON.stringify(actions.shift()) } })));
     vi.stubGlobal("fetch", fetchMock);
@@ -445,7 +445,7 @@ describe("deterministic mandatory Web controller", () => {
     const model = vi.fn().mockImplementation(async () => {
       expect(transport.get).toHaveBeenCalledTimes(2);
       expect(events.mock.calls.slice(0, 2)).toEqual([["web_search: completed"], ["read_search_result: completed"]]);
-      return new Response(JSON.stringify({ message: { content: '{"tool":"write_file","content":"Analyse originale de la source."}' } }));
+      return new Response(JSON.stringify({ message: { content: '{"content":"Analyse originale de la source."}' } }));
     }); vi.stubGlobal("fetch", model);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root, onEvent: events });
     expect(model).toHaveBeenCalledTimes(1);
@@ -462,7 +462,7 @@ describe("deterministic mandatory Web controller", () => {
     const actions = [
       { tool: "write_file", content: "Too early" }, { tool: "web_search", index: 0 },
       { tool: "read_public_url", index: 0 }, { tool: "read_search_result", index: 2 },
-      { tool: "read_search_result", index: 1 }, { tool: "write_file", content: "Analyse originale du deuxième résultat." },
+      { tool: "read_search_result", index: 1 }, { content: "Analyse originale du deuxième résultat." },
     ];
     const model = vi.fn().mockImplementation(async (_url, request) => {
       const call = model.mock.calls.length;
@@ -499,7 +499,7 @@ describe("deterministic mandatory Web controller", () => {
     const transport = fake(reply("Direct source")); inject(transport);
     const model = vi.fn().mockImplementation(async () => {
       expect(transport.get).toHaveBeenCalledTimes(1);
-      return new Response(JSON.stringify({ message: { content: '{"tool":"write_file","content":"Analyse de la source directe."}' } }));
+      return new Response(JSON.stringify({ message: { content: '{"content":"Analyse de la source directe."}' } }));
     }); vi.stubGlobal("fetch", model);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root });
     expect(model).toHaveBeenCalledTimes(1);
@@ -522,4 +522,54 @@ it("does not ask for drafting if the selected source fails", async () => {
     expect(transport.get).toHaveBeenCalledTimes(2);
     await expect(readFile(path.join(root, "rapport.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   } finally { await rm(temp, { recursive: true, force: true }); }
+});
+
+describe("dedicated Web report drafting retries", () => {
+  let temp: string;
+  let root: string;
+  let transport: ReturnType<typeof fake>;
+  beforeEach(async () => {
+    temp = await mkdtemp(path.join(os.tmpdir(), "scout-draft-")); root = path.join(temp, "workspace"); await mkdir(root);
+    await writeFile(path.join(root, "MISSION.txt"), "Réponds en français sur le thème public.");
+    await writeFile(path.join(root, "rapport.txt"), "Previous report");
+    vi.stubEnv("SCOUT_PUBLIC_QUERIES", '["public"]'); vi.stubEnv("SCOUT_PUBLIC_URLS", undefined);
+    vi.stubEnv("SCOUT_DEBUG_ACTIONS", "1");
+    transport = fake(reply(htmlResult, { "content-type": "text/html" }), reply("Actual public source"));
+    const original = sessionModule.WebResearchSession;
+    vi.spyOn(sessionModule, "WebResearchSession").mockImplementation(inputs => new original(inputs, new SafeWebClient(transport)));
+  });
+  afterEach(async () => { await rm(temp, { recursive: true, force: true }); });
+  it.each([
+    '{"content":"The sources are in the report and they are useful for readers with their findings."}',
+    '{"content":"actual, complete answer to MISSION.txt"}', '{"content":""}',
+    '{"tool":"write_file","path":"MISSION.txt","content":"Forbidden destination"}',
+    '{"tool":"web_search","index":0}', 'not JSON', '{"content":12}',
+  ])("retries rejected drafting output %s without repeating Web operations", async raw => {
+    const debug = vi.spyOn(console, "error").mockImplementation(() => {});
+    const model = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ message: { content: raw } })))
+      .mockImplementationOnce(async (_url, request) => {
+        expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("Previous report");
+        expect(transport.get).toHaveBeenCalledTimes(2);
+        expect(JSON.parse(request.body).messages.at(-1).content).toContain("français");
+        return new Response(JSON.stringify({ message: { content: '{"content":"Une synthèse originale des données publiques."}' } }));
+      });
+    vi.stubGlobal("fetch", model);
+    const events = vi.fn();
+    await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root, onEvent: events });
+    expect(transport.get).toHaveBeenCalledTimes(2); expect(model).toHaveBeenCalledTimes(2);
+    expect(debug.mock.calls).toEqual([[raw]]);
+    expect(events).toHaveBeenLastCalledWith("Scout completed: rapport.txt verified.");
+    expect(await readFile(path.join(root, "MISSION.txt"), "utf8")).toContain("Réponds en français");
+    const report = await readFile(path.join(root, "rapport.txt"), "utf8");
+    expect(report).toContain("Une synthèse originale"); expect(report).toContain("Sources\n"); expect(report).toContain("https://example.com/article");
+  });
+  it.each([1, 12])("bounds drafting retries with total model budget %s", async maxTurns => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const model = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ message: { content: '{"content":"rapport prêt"}' } })));
+    vi.stubGlobal("fetch", model);
+    await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root, maxTurns })).rejects.toThrow("drafting attempts");
+    expect(model).toHaveBeenCalledTimes(Math.min(maxTurns, 3));
+    expect(transport.get).toHaveBeenCalledTimes(2);
+    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("Previous report");
+  });
 });

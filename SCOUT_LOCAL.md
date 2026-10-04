@@ -96,8 +96,9 @@ Web, le rapport local reste autorisé. Un ancien rapport ne satisfait pas ce gar
 Tout champ `path` est refusé avant exécution, y compris `MISSION.txt`, `rapport.txt`
 ou un autre fichier. Le runtime fournit toujours le chemin fixe `rapport.txt`
 à l’outil interne, dont le contrat et les protections restent inchangés.
-Après lecture utile, l’étape suivante demande « write_file with content only;
-runtime writes rapport.txt ». Le modèle n’a aucun choix de destination d’écriture.
+Après lecture Web utile, le runtime passe à la rédaction dédiée décrite ci-dessous :
+le modèle fournit uniquement `content`, sans action. Le modèle n’a aucun choix de
+destination d’écriture.
 Les Sources sont ajoutées par le runtime, et l’arrêt reste immédiat après
 relecture d’un rapport valide et non vide.
 
@@ -316,8 +317,31 @@ Un échec ou une page vide termine immédiatement l’exécution sans rapport.
 
 Avec des URLs publiques mais aucune requête, la première URL est lue automatiquement.
 Sans entrée Web, le mode de rapport local reste disponible. Après une source utile,
-le modèle reçoit le texte comme données non fiables, la consigne de langue et la
-demande de `write_file` avec `content` uniquement. Sources, validation du rapport,
+le modèle reçoit le texte comme données non fiables et la consigne de langue dans
+un appel dédié à la rédaction, avec uniquement un champ `content`. Sources, validation du rapport,
 confinement et arrêt immédiat restent inchangés. Les lectures/recherches automatiques
 consomment les mêmes budgets Web ; le choix d’index et la rédaction partagent les
 12 appels maximum à Ollama. Aucun droit supplémentaire n’est accordé au modèle.
+
+## Rédaction Web dédiée et déterministe
+
+Après une lecture Web utile, le runtime quitte le protocole d’actions et lance
+un appel Ollama dédié à la rédaction. Il fournit uniquement un prompt court,
+`MISSION.txt`, les données de la source lue (non fiables) et le rappel de langue.
+L’historique de sélection et les exemples d’actions ne sont pas inclus. La sortie
+utilise toujours `format:"json"`, avec un seul champ obligatoire `content` de type
+chaîne. Toute action, champ `tool`/`path`, propriété supplémentaire, mauvais type,
+texte libre ou JSON invalide est refusé ; aucune réponse n’est exécutée comme commande.
+
+Le runtime valide le contenu et la langue, construit lui-même Sources, puis appelle
+l’outil interne avec le chemin fixe `rapport.txt`. Il relit ensuite le fichier,
+vérifie l’égalité avec le texte écrit ainsi que le contenu/langue, et s’arrête
+immédiatement avec succès. Une erreur d’écriture ou de relecture termine en erreur.
+
+Une sortie invalide, un placeholder ou une langue manifestement incorrecte demande
+une nouvelle rédaction sans refaire la recherche ni la lecture. Le maximum est de
+3 tentatives de rédaction (premier essai inclus), limité aussi par le budget restant
+des 12 appels à Ollama. Épuisement : erreur, aucun nouveau rapport écrit, rapport
+précédent préservé. Le debug local affiche seulement les sorties brutes rejetées.
+Qwen2.5 1.5B, les réglages Ollama et les budgets/protections Web restent inchangés.
+Sans entrée Web, le protocole local d’actions reste disponible.

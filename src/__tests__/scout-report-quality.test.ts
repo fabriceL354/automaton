@@ -28,3 +28,14 @@ describe("Scout V2.1 local report language", () => {
     expect(reportLanguageReminder(undefined)).toBe("");
   });
 });
+
+describe("dedicated drafting output contract", () => {
+  it.each(["", "not JSON", '{"content":', "null", "[]", '"free text"', '{"content":42}', '{"content":null}', '{"content":{}}', '{"content":[]}', '{"tool":"write_file","content":"answer"}', '{"content":"answer","path":"MISSION.txt"}', '{"content":"answer","extra":true}', '```json\n{"content":"answer"}\n```'])("rejects non-content output %s", async raw => {
+    const { parseScoutReport } = await import("../agent/local-runner.js");
+    expect(() => parseScoutReport(raw)).toThrow();
+  });
+  it("accepts only a content string without interpreting it as an action", async () => {
+    const { parseScoutReport } = await import("../agent/local-runner.js");
+    expect(parseScoutReport('{"content":"Original report"}')).toBe("Original report");
+  });
+});
