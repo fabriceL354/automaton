@@ -45,6 +45,43 @@ export class DuckDuckGoHtmlProvider implements SearchProvider {
   }
 }
 
+/** Anonymous Lite GET only. A blocked provider is never bypassed or replaced. */
+export class DuckDuckGoLiteProvider implements SearchProvider {
+  async search(query: string, client: SafeWebClient) {
+    const endpoint = new URL("https://lite.duckduckgo.com/lite/");
+    endpoint.searchParams.set("q", query);
+    const page = await client.read(endpoint.href);
+    const finalUrl = new URL(page.url);
+    if (page.mime !== "text/html" || finalUrl.origin !== endpoint.origin || finalUrl.pathname !== endpoint.pathname ||
+        /captcha|challenge|anomaly\.js|verify\s+(?:that\s+)?you\s+are\s+human/i.test(page.text)) {
+      throw new Error("Public Lite search blocked or unexpected; no bypass");
+    }
+    const results: SearchResult[] = [];
+    const links = [...page.text.matchAll(/<a\b([^>]*\sclass\s*=\s*["'][^"']*["'][^>]*)>([\s\S]*?)<\/a>/gi)]
+      .filter(match => match[1].match(/\sclass\s*=\s*["']([^"']*)["']/i)?.[1].split(/\s+/).includes("result-link"));
+    for (let i = 0; i < links.length && results.length < 5; i++) {
+      const href = links[i][1].match(/\shref\s*=\s*["']([^"']+)["']/i)?.[1];
+      if (!href) continue;
+      try {
+        const target = new URL(textFromHtml(href), endpoint);
+        const duckHost = ["duckduckgo.com", "www.duckduckgo.com", "lite.duckduckgo.com", "html.duckduckgo.com"].includes(target.hostname);
+        const wrapped = duckHost ? target.searchParams.get("uddg") : null;
+        // Never turn a provider navigation/challenge link into a source capability.
+        if (duckHost && !wrapped) continue;
+        const url = publicHttpsUrl(wrapped ?? target.href).href;
+        const title = textFromHtml(links[i][2]).slice(0, 200);
+        if (!title || results.some(result => result.url === url)) continue;
+        const end = i + 1 < links.length ? links[i + 1].index! : page.text.length;
+        const section = page.text.slice(links[i].index! + links[i][0].length, end);
+        const snippet = section.match(/<(?:td|div|span)\b[^>]*\sclass\s*=\s*["'][^"']*\bresult-snippet\b[^"']*["'][^>]*>([\s\S]*?)<\/(?:td|div|span)>/i)?.[1] ?? "";
+        results.push({ title, url, snippet: textFromHtml(snippet).slice(0, 400) });
+      } catch { /* Every extracted URL must pass the public HTTPS guard. */ }
+    }
+    if (!results.length) throw new Error("Public Lite search returned no usable results or an unsupported page");
+    return { results, consultedUrl: page.url };
+  }
+}
+
 /** Explicitly selected public instance; never discover/rotate instances or bypass a block. */
 export class SearxngProvider implements SearchProvider {
   private readonly origin: string;
@@ -91,10 +128,11 @@ export class UnavailableSearchProvider implements SearchProvider {
 export function configuredSearchProvider(env: Record<string, string | undefined> = process.env): SearchProvider {
   switch (env.SCOUT_SEARCH_PROVIDER ?? "none") {
     case "none": return new UnavailableSearchProvider();
+    case "duckduckgo-lite": return new DuckDuckGoLiteProvider();
     case "duckduckgo-html": return new DuckDuckGoHtmlProvider();
     case "searxng":
       if (!env.SCOUT_SEARXNG_URL) throw new Error("SCOUT_SEARXNG_URL is required for searxng");
       return new SearxngProvider(env.SCOUT_SEARXNG_URL);
-    default: throw new Error("SCOUT_SEARCH_PROVIDER must be none, searxng or duckduckgo-html");
+    default: throw new Error("SCOUT_SEARCH_PROVIDER must be none, searxng, duckduckgo-lite or duckduckgo-html");
   }
 }

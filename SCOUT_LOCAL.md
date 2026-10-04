@@ -158,9 +158,31 @@ proxy vers un service distant.
 ## Fournisseur de recherche
 
 `SearchProvider` reste l’interface commune. Le registre accepte
-`SCOUT_SEARCH_PROVIDER=none` (défaut), `searxng` ou `duckduckgo-html`.
+`SCOUT_SEARCH_PROVIDER=none` (défaut), `duckduckgo-lite`, `searxng` ou
+`duckduckgo-html`.
 Aucun fournisseur n’est choisi automatiquement ni remplacé après un blocage.
 La lecture directe via `SCOUT_PUBLIC_URLS` reste disponible sans moteur.
+
+DuckDuckGo Lite est disponible par sélection explicite :
+
+```sh
+SCOUT_SEARCH_PROVIDER=duckduckgo-lite \
+SCOUT_PUBLIC_QUERIES='["votre requête publique"]' \
+node dist/index.js --run
+```
+
+Le runtime construit uniquement `q` à partir de la requête déjà autorisée vers
+l’endpoint fixe `https://lite.duckduckgo.com/lite/`. HTTP 200 et `text/html` sont
+obligatoires ; la destination finale doit rester sur cet endpoint. Le parseur
+reconnaît les liens de classe `result-link`, décode les wrappers DuckDuckGo `uddg`,
+filtre les URLs avec `publicHttpsUrl`, élimine les doublons et fournit au maximum
+5 résultats (titres 200 caractères, extraits `result-snippet` 400 caractères).
+Aucun lien de navigation DuckDuckGo n’est utilisé comme résultat. CAPTCHA,
+challenge, page inhabituelle, HTTP 202 et zéro résultat utilisable donnent un échec
+sans nouvel essai automatique ni fallback. Les tests sont simulés uniquement.
+Le test matériel fourni par l’opérateur a confirmé HTTP/1.1 200 et `result-link`
+pour une requête de test ; cela ne garantit pas la disponibilité pour toute requête.
+La lecture des destinations garde les vérifications DNS/pinning/SSRF et budgets.
 
 SearXNG est une alternative maintenable grâce à son API GET documentée :
 https://docs.searxng.org/dev/search_api.html

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SafeWebClient, publicAddress, publicHttpsUrl, WEB_LIMITS, nativeWebTransport, type WebTransport, type HttpReply } from "../scout-web/network.js";
-import { DuckDuckGoHtmlProvider, SearxngProvider, configuredSearchProvider, UnavailableSearchProvider, textFromHtml } from "../scout-web/search.js";
+import { DuckDuckGoHtmlProvider, DuckDuckGoLiteProvider, SearxngProvider, configuredSearchProvider, UnavailableSearchProvider, textFromHtml } from "../scout-web/search.js";
 import { WebResearchSession, publicWebInputs } from "../scout-web/session.js";
 import * as sessionModule from "../scout-web/session.js";
 import { parseScoutAction, runLocalScout, DEFAULT_SCOUT_MODEL } from "../agent/local-runner.js";
@@ -360,5 +360,68 @@ describe("explicit public search providers without Internet", () => {
     await session.readIndex("read_search_result", 0);
     expect(session.canWriteReport()).toBe(true);
     expect(session.report("Original analysis")).toContain(result.url);
+  });
+});
+
+describe("DuckDuckGo Lite simulated public search", () => {
+  const lite = `<table><tr><td><a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Farticle&amp;rut=public" class="result-link">Example &amp; title</a></td></tr><tr><td class="result-snippet">Public <b>snippet</b></td></tr></table>`;
+  const html = (text: string, status = 200) => reply(text, { "content-type": "text/html" }, status);
+  it("selects only explicitly and uses the fixed endpoint with q only", async () => {
+    expect(configuredSearchProvider({ SCOUT_SEARCH_PROVIDER: "duckduckgo-lite" })).toBeInstanceOf(DuckDuckGoLiteProvider);
+    expect(configuredSearchProvider({})).toBeInstanceOf(UnavailableSearchProvider);
+    const transport = fake(html(lite));
+    const client = new SafeWebClient(transport);
+    const found = await new DuckDuckGoLiteProvider().search("exact public & topic", client);
+    expect(found.results).toEqual([{ title: "Example & title", url: "https://example.com/article", snippet: "Public snippet" }]);
+    const request = transport.get.mock.calls[0][0];
+    expect(request.origin + request.pathname).toBe("https://lite.duckduckgo.com/lite/");
+    expect([...request.searchParams]).toEqual([["q", "exact public & topic"]]);
+    expect(client.wasRead(found.consultedUrl)).toBe(true);
+    expect(transport.get).toHaveBeenCalledTimes(1);
+  });
+  it("deduplicates decoded links and bounds results/title/snippet", async () => {
+    const extra = Array.from({ length: 8 }, (_, i) => `<a class='other result-link' href='https://example.com/${i}'>${"T".repeat(300)}</a><td class='result-snippet'>${"S".repeat(500)}</td>`).join("");
+    const found = await new DuckDuckGoLiteProvider().search("public", new SafeWebClient(fake(html(lite + lite + extra))));
+    expect(found.results).toHaveLength(5);
+    expect(found.results.filter(row => row.url === "https://example.com/article")).toHaveLength(1);
+    expect(found.results.every(row => row.title.length <= 200 && row.snippet.length <= 400)).toBe(true);
+  });
+  it.each(["http://example.com/", "https://127.0.0.1/", "https://10.0.0.1/", "https://u:p@example.com/", "file:///etc/passwd", "javascript:alert(1)"])("never offers dangerous direct or wrapped URLs %s", async url => {
+    for (const href of [url, `https://duckduckgo.com/l/?uddg=${encodeURIComponent(url)}`]) {
+      await expect(new DuckDuckGoLiteProvider().search("public", new SafeWebClient(fake(html(`<a class='result-link' href='${href}'>Unsafe</a>`))))).rejects.toThrow("no usable results");
+    }
+  });
+  it.each(["", "<html>Unusual page</html>", "<a href='https://example.com/'>No class</a>", "<a class='result-linkish' href='https://example.com/'>Wrong class</a>", "<a data-class='result-link' href='https://example.com/'>Not a class</a>", "<a class='result-link' href='https://duckduckgo.com/about'>Navigation</a>", "<a class='result-link' href='https://example.com/'> </a>"])("refuses empty/unsupported HTML %j", async text => {
+    await expect(new DuckDuckGoLiteProvider().search("public", new SafeWebClient(fake(html(text))))).rejects.toThrow();
+  });
+  it.each(["CAPTCHA", "challenge-form", "anomaly.js", "Verify you are human"])("refuses %s even alongside result links", async marker => {
+    const transport = fake(html(lite + `<form>${marker}</form>`));
+    await expect(new DuckDuckGoLiteProvider().search("public", new SafeWebClient(transport))).rejects.toThrow("blocked");
+    expect(transport.get).toHaveBeenCalledTimes(1);
+  });
+  it.each([202, 403, 429])("never accepts HTTP %s as search results", async status => {
+    await expect(new DuckDuckGoLiteProvider().search("public", new SafeWebClient(fake(html(lite, status))))).rejects.toThrow(`HTTP ${status}`);
+  });
+  it("rejects non-HTML, oversized responses, private DNS and redirects", async () => {
+    await expect(new DuckDuckGoLiteProvider().search("public", new SafeWebClient(fake(reply(lite))))).rejects.toThrow("unexpected");
+    await expect(new DuckDuckGoLiteProvider().search("public", new SafeWebClient(fake(html("x".repeat(WEB_LIMITS.responseBytes + 1)))))).rejects.toThrow("limit");
+    const transport = fake(html(lite)); transport.resolve.mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
+    await expect(new DuckDuckGoLiteProvider().search("public", new SafeWebClient(transport))).rejects.toThrow("DNS");
+    expect(transport.get).not.toHaveBeenCalled();
+    await expect(new DuckDuckGoLiteProvider().search("public", new SafeWebClient(fake(reply("", { location: "https://127.0.0.1/" }, 302))))).rejects.toThrow();
+  });
+  it("preserves indexed search/read/report and consults destinations only when requested", async () => {
+    const transport = fake(html(lite), reply("Useful public source"));
+    const session = new WebResearchSession({ queries: ["public"], urls: [] }, new SafeWebClient(transport), new DuckDuckGoLiteProvider());
+    expect(await session.search("unapproved secret")).toMatch(/^ERROR:/);
+    expect(transport.get).not.toHaveBeenCalled();
+    expect(JSON.parse(await session.searchIndex(0)).results[0].index).toBe(0);
+    expect(transport.get).toHaveBeenCalledTimes(1);
+    expect(session.canWriteReport()).toBe(false);
+    expect(() => session.indexedValue("read_search_result", 1)).toThrow();
+    await session.readIndex("read_search_result", 0);
+    expect(session.canWriteReport()).toBe(true);
+    expect(session.report("Original answer")).toContain("https://example.com/article");
+    expect(transport.get).toHaveBeenCalledTimes(2);
   });
 });
