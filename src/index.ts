@@ -3,7 +3,7 @@
 import { loadLocalScoutConfig, runLocalScout } from "./agent/local-runner.js";
 
 const VERSION = "0.2.1";
-const HELP = `Scout V2 Web Research v${VERSION}
+const HELP = `Scout V2.1 Report Quality v${VERSION}
 
 Usage:
   automaton --run          Run Scout from ~/.automaton/scout-workspace/MISSION.txt
@@ -40,7 +40,7 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "-v":
-      console.log(`Scout V2 Web Research v${VERSION}`);
+      console.log(`Scout V2.1 Report Quality v${VERSION}`);
       return;
     case "--run": {
       const config = await loadLocalScoutConfig();

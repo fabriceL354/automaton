@@ -1,4 +1,4 @@
-# Scout V2 Web Research
+# Scout V2.1 Report Quality
 
 Scout utilise Ollama local pour l’inférence et un workspace confiné pour ses
 fichiers. V2 ajoute uniquement des lectures Web publiques HTTPS. Aucun Conway,
@@ -278,3 +278,22 @@ pnpm exec vitest run src/__tests__/scout-local.test.ts src/__tests__/scout-web.t
 Les tests simulent HTTP, DNS, redirections, SSRF, limites, timeouts, MIME,
 recherche, extraction, exfiltration refusée, validation des actions, sources et
 parcours mission → recherche → lecture → rapport. Ils ne dépendent pas d’Internet.
+
+## Langue du rapport (V2.1)
+
+Les consignes explicites `en français`, `in French`, `en anglais` et `in English`
+sont reconnues localement, sans distinction de casse/accents. Sans consigne claire,
+ou avec des consignes contradictoires/négatives, aucune langue n’est imposée.
+Le runtime rappelle la langue au démarrage, après chaque lecture et dans les
+retours avant rédaction/reprise. La langue des sources ne change pas la consigne.
+
+Avant toute écriture, puis après relecture, une heuristique locale examine le
+corps du rapport hors Sources, URLs, code et citations explicites. Elle refuse
+uniquement des indices forts de prose entièrement dans l’autre langue : au moins
+6 occurrences et 4 mots courants distincts, sans indice de la langue demandée.
+Le refus préserve le rapport existant et demande une nouvelle réponse dans la
+langue demandée. Les textes courts, techniques ou mixtes restent acceptés pour
+éviter les faux positifs. Ce contrôle léger n’est pas une détection linguistique
+complète ni une garantie de traduction ; aucun texte n’est envoyé à un service
+externe. Le diagnostic local `SCOUT_DEBUG_ACTIONS=1` affiche aussi les actions
+rejetées pour langue incorrecte. L’architecture et les budgets Web sont inchangés.

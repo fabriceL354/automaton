@@ -232,7 +232,7 @@ describe("Scout V2 runner integration without Internet", () => {
   afterEach(async () => { await rm(temp, { recursive: true, force: true }); });
   it("uses the two Web tools, synthesizes, appends verified Sources and stops immediately", async () => {
     const root = path.join(temp, "workspace");
-    await writeFile(path.join(root, "MISSION.txt"), "Recherche sur un thème public. Local secret: DO_NOT_SEND");
+    await writeFile(path.join(root, "MISSION.txt"), "Recherche sur un thème public. Réponds en français. Local secret: DO_NOT_SEND");
     await writeFile(path.join(root, "secret.txt"), "WORKSPACE_SECRET");
     vi.stubEnv("SCOUT_PUBLIC_QUERIES", '["public topic"]');
     vi.stubEnv("SCOUT_SEARCH_PROVIDER", "duckduckgo-lite");
@@ -254,6 +254,7 @@ describe("Scout V2 runner integration without Internet", () => {
     vi.stubGlobal("fetch", fetchMock);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root });
     expect(fetchMock).toHaveBeenCalledTimes(9);
+    expect(JSON.parse(fetchMock.mock.calls[6][1].body).messages.at(-1).content).toContain("Report language: français");
     for (const [url] of fetchMock.mock.calls) expect(url).toBe("http://127.0.0.1:11434/api/chat");
     expect(transport.get).toHaveBeenCalledTimes(2);
     for (const [url] of transport.get.mock.calls) expect(url.href).not.toMatch(/WORKSPACE_SECRET|DO_NOT_SEND/);

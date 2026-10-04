@@ -489,3 +489,30 @@ describe("Scout write destination belongs exclusively to runtime", () => {
     expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("Existing report");
   });
 });
+
+describe("Scout V2.1 runtime report language", () => {
+  const french = "Les sources sont dans le rapport et elles sont utiles pour les lecteurs avec une synthèse claire.";
+  const english = "The sources are in the report and they are useful for readers with a clear summary of their findings.";
+  it.each([
+    ["Réponds en français", english, french, "français"],
+    ["Answer in English", french, english, "English"],
+  ])("refuses opposite-language prose then accepts requested language: %s", async (mission, wrong, correct, label) => {
+    await writeFile(path.join(root, "MISSION.txt"), mission);
+    await writeFile(path.join(root, "rapport.txt"), "Previous report");
+    vi.stubEnv("SCOUT_DEBUG_ACTIONS", "1");
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
+    const wrongAction = { tool: "write_file", content: wrong };
+    const fetchMock = vi.fn().mockResolvedValueOnce(reply(wrongAction)).mockImplementationOnce(async () => {
+      expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("Previous report");
+      return reply({ tool: "write_file", content: correct });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const events = vi.fn();
+    await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root, maxTurns: 2, onEvent: events });
+    expect(events).toHaveBeenCalledWith("ERROR: report language rejected before writing");
+    expect(diagnostic.mock.calls).toEqual([[JSON.stringify(wrongAction)]]);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).messages.at(-1).content).toContain(label);
+    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toContain(correct);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
