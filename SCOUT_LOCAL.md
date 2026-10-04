@@ -88,7 +88,8 @@ Le runtime indique l’étape suivante après chaque outil ou rejet. Si des entr
 Web sont fournies, aucune écriture de `rapport.txt` n’est autorisée avant la lecture
 réussie d’une page contenant du texte utile. Une recherche seule, une erreur ou une
 page vide ne débloque pas le rapport. Aucun rapport de remplacement n’est écrit
-si le Web échoue ; la limite de 12 tours finit l’exécution en erreur. Sans entrée
+si une étape Web obligatoire échoue : l’exécution se termine immédiatement en erreur.
+Les sélections/rédactions invalides restent bornées à 12 appels au modèle. Sans entrée
 Web, le rapport local reste autorisé. Un ancien rapport ne satisfait pas ce garde.
 
 `write_file` accepte exclusivement `tool` et `content`, sans `path`.
@@ -297,3 +298,26 @@ langue demandée. Les textes courts, techniques ou mixtes restent acceptés pour
 complète ni une garantie de traduction ; aucun texte n’est envoyé à un service
 externe. Le diagnostic local `SCOUT_DEBUG_ACTIONS=1` affiche aussi les actions
 rejetées pour langue incorrecte. L’architecture et les budgets Web sont inchangés.
+
+## Contrôleur des étapes Web obligatoires
+
+Avec au moins une requête publique, le runtime exécute `web_search` sur l’index 0
+avant tout appel à Ollama. Il ne demande jamais au modèle de déclencher cette
+recherche initiale. Échec de recherche ou absence de résultat : arrêt en erreur,
+sans rédaction, sans fallback vers une autre requête, URL ou fournisseur.
+
+Avec un résultat unique, le runtime lit automatiquement son index 0. Avec plusieurs
+résultats, un prompt court demande seulement `read_search_result` et un index.
+Le runtime refuse toutes les autres actions pendant cette sélection, y compris
+`write_file`, les fichiers locaux et une nouvelle recherche. Un index invalide
+ne déclenche aucune lecture ; le modèle peut réessayer dans la limite des tours.
+Après la sélection valide, le runtime lit la source avant de passer à la rédaction.
+Un échec ou une page vide termine immédiatement l’exécution sans rapport.
+
+Avec des URLs publiques mais aucune requête, la première URL est lue automatiquement.
+Sans entrée Web, le mode de rapport local reste disponible. Après une source utile,
+le modèle reçoit le texte comme données non fiables, la consigne de langue et la
+demande de `write_file` avec `content` uniquement. Sources, validation du rapport,
+confinement et arrêt immédiat restent inchangés. Les lectures/recherches automatiques
+consomment les mêmes budgets Web ; le choix d’index et la rédaction partagent les
+12 appels maximum à Ollama. Aucun droit supplémentaire n’est accordé au modèle.

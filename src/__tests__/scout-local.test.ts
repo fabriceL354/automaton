@@ -399,27 +399,6 @@ describe("compact tool contracts and local diagnostics", () => {
   });
 });
 
-describe("runtime report gate", () => {
-  it.each([
-    { tool: "write_file", content: "Premature" },
-    { tool: "write_file", path: "sub/../rapport.txt", content: "Premature" },
-    { tool: "web_search", index: 1 },
-    { tool: "read_search_result", index: 0 },
-    { tool: "read_public_url", index: 0 },
-  ])("rejects premature or out of bounds action %j without tool execution", async action => {
-    vi.stubEnv("SCOUT_PUBLIC_QUERIES", '["public"]');
-    vi.stubEnv("SCOUT_DEBUG_ACTIONS", "1");
-    await writeFile(path.join(root, "MISSION.txt"), "Research");
-    await writeFile(path.join(root, "rapport.txt"), "Old report");
-    const raw = JSON.stringify(action);
-    const debug = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ message: { content: raw } }))));
-    await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root, maxTurns: 1 })).rejects.toThrow("turn limit");
-    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("Old report");
-    expect(debug.mock.calls).toEqual([[raw]]);
-  });
-});
-
 describe("report content quality gate", () => {
   it.each([
     "", " \n\t", "actual, complete answer to MISSION.txt", "Actual, complete answer to MISSION.txt.",
