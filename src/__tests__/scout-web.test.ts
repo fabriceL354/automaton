@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { SafeWebClient, publicAddress, publicHttpsUrl, WEB_LIMITS, nativeWebTransport, type WebTransport, type HttpReply } from "../scout-web/network.js";
-import { DuckDuckGoHtmlProvider, textFromHtml } from "../scout-web/search.js";
+import { DuckDuckGoHtmlProvider, SearxngProvider, configuredSearchProvider, UnavailableSearchProvider, textFromHtml } from "../scout-web/search.js";
 import { WebResearchSession, publicWebInputs } from "../scout-web/session.js";
 import * as sessionModule from "../scout-web/session.js";
 import { parseScoutAction, runLocalScout, DEFAULT_SCOUT_MODEL } from "../agent/local-runner.js";
@@ -22,6 +22,7 @@ function fake(...responses: HttpReply[]): WebTransport & { get: ReturnType<typeo
     return responses.shift()!;
   }) };
 }
+beforeEach(() => { vi.stubEnv("SCOUT_SEARCH_PROVIDER", "duckduckgo-html"); vi.stubEnv("SCOUT_SEARXNG_URL", undefined); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers(); });
 
 describe("Scout V2 public address/URL security", () => {
@@ -300,5 +301,64 @@ describe("indexed Web state machine", () => {
     expect(await session.readIndex("read_public_url", 0)).toContain("source");
     expect(session.canWriteReport()).toBe(true);
     expect(session.sources()).toEqual(["https://example.com/"]);
+  });
+});
+
+describe("explicit public search providers without Internet", () => {
+  const jsonReply = (data: unknown) => reply(JSON.stringify(data), { "content-type": "application/json" });
+  const result = { title: "Public <b>title</b>", url: "https://example.com/article", content: "Useful snippet" };
+  it("uses one GET endpoint, validates results and records actual consultation", async () => {
+    const transport = fake(jsonReply({ results: [result, { ...result, url: "https://127.0.0.1/" }] }));
+    const client = new SafeWebClient(transport);
+    const found = await new SearxngProvider("https://search.example/").search("public topic", client);
+    expect(found.results).toEqual([{ title: "Public title", url: result.url, snippet: result.content }]);
+    expect(transport.get.mock.calls[0][0].href).toBe("https://search.example/search?q=public+topic&format=json");
+    expect(client.wasRead(found.consultedUrl)).toBe(true);
+    expect(transport.get).toHaveBeenCalledTimes(1);
+  });
+  it.each([202, 403, 429, 500])("refuses HTTP %s without retries/fallback", async status => {
+    const transport = fake(reply('{"results":[]}', { "content-type": "application/json" }, status));
+    await expect(new SearxngProvider("https://search.example").search("public", new SafeWebClient(transport))).rejects.toThrow(`HTTP ${status}`);
+    expect(transport.get).toHaveBeenCalledTimes(1);
+  });
+  it("keeps DuckDuckGo 202 blocked even with result-looking HTML", async () => {
+    const transport = fake(reply(htmlResult, { "content-type": "text/html" }, 202));
+    await expect(new DuckDuckGoHtmlProvider().search("public", new SafeWebClient(transport))).rejects.toThrow("HTTP 202");
+    expect(transport.get).toHaveBeenCalledTimes(1);
+  });
+  it.each([null, [], {}, { error: "blocked", results: [result] }, { results: [] }, { results: [null] }, { results: [{ ...result, title: 42 }] }, { results: [{ ...result, content: {} }] }, { results: [{ ...result, url: "http://example.com/" }] }])("fails closed on malformed/empty results %j", async data => {
+    await expect(new SearxngProvider("https://search.example").search("public", new SafeWebClient(fake(jsonReply(data))))).rejects.toThrow();
+  });
+  it.each(["text/html", "text/plain", "application/octet-stream"])("rejects %s for search JSON", async mime => {
+    await expect(new SearxngProvider("https://search.example").search("public", new SafeWebClient(fake(reply('<form>captcha</form>', { "content-type": mime }))))).rejects.toThrow("MIME");
+  });
+  it("rejects JSON on normal page reads and oversized search JSON", async () => {
+    await expect(new SafeWebClient(fake(jsonReply({ results: [result] }))).read("https://example.com")).rejects.toThrow("MIME");
+    await expect(new SearxngProvider("https://search.example").search("public", new SafeWebClient(fake(reply("x".repeat(WEB_LIMITS.responseBytes + 1), { "content-type": "application/json" }))))).rejects.toThrow("limit");
+  });
+  it("applies private DNS and redirect checks to search endpoints", async () => {
+    const privateDns = fake(jsonReply({ results: [result] })); privateDns.resolve.mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
+    await expect(new SearxngProvider("https://search.example").search("public", new SafeWebClient(privateDns))).rejects.toThrow("DNS");
+    expect(privateDns.get).not.toHaveBeenCalled();
+    await expect(new SearxngProvider("https://search.example").search("public", new SafeWebClient(fake(reply("", { location: "https://127.0.0.1/" }, 302))))).rejects.toThrow();
+  });
+  it("disables search by default and validates operator configuration", async () => {
+    const provider = configuredSearchProvider({});
+    expect(provider).toBeInstanceOf(UnavailableSearchProvider);
+    const transport = fake();
+    await expect(provider.search("public", new SafeWebClient(transport))).rejects.toThrow("No public search provider");
+    expect(transport.get).not.toHaveBeenCalled();
+    expect(configuredSearchProvider({ SCOUT_SEARCH_PROVIDER: "searxng", SCOUT_SEARXNG_URL: "https://search.example" })).toBeInstanceOf(SearxngProvider);
+    for (const config of [{ SCOUT_SEARCH_PROVIDER: "other" }, { SCOUT_SEARCH_PROVIDER: "searxng" }, { SCOUT_SEARCH_PROVIDER: "searxng", SCOUT_SEARXNG_URL: "https://localhost" }]) expect(() => configuredSearchProvider(config)).toThrow();
+    for (const url of ["http://search.example", "https://u:p@search.example", "https://search.example/path", "https://search.example/?key=secret"]) expect(() => new SearxngProvider(url)).toThrow();
+  });
+  it("preserves indexed search → source → report with SearXNG", async () => {
+    const transport = fake(jsonReply({ results: [result] }), reply("Source text"));
+    const session = new WebResearchSession({ queries: ["public"], urls: [] }, new SafeWebClient(transport), new SearxngProvider("https://search.example"));
+    expect(JSON.parse(await session.searchIndex(0)).results[0].index).toBe(0);
+    expect(session.canWriteReport()).toBe(false);
+    await session.readIndex("read_search_result", 0);
+    expect(session.canWriteReport()).toBe(true);
+    expect(session.report("Original analysis")).toContain(result.url);
   });
 });

@@ -44,3 +44,57 @@ export class DuckDuckGoHtmlProvider implements SearchProvider {
     return { results, consultedUrl: page.url };
   }
 }
+
+/** Explicitly selected public instance; never discover/rotate instances or bypass a block. */
+export class SearxngProvider implements SearchProvider {
+  private readonly origin: string;
+  constructor(baseUrl: string) {
+    const url = publicHttpsUrl(baseUrl);
+    if (url.pathname !== "/" || url.search || url.hash || baseUrl.includes("#")) throw new Error("SearXNG requires a public HTTPS origin without path/query/fragment");
+    this.origin = url.origin;
+  }
+  async search(query: string, client: SafeWebClient) {
+    const endpoint = new URL("/search", this.origin);
+    endpoint.searchParams.set("q", query);
+    endpoint.searchParams.set("format", "json");
+    const page = await client.readSearchJson(endpoint.href);
+    if (new URL(page.url).origin !== this.origin) throw new Error("Search redirected away from selected instance");
+    const data: unknown = JSON.parse(page.text);
+    if (!data || typeof data !== "object" || Array.isArray(data) ||
+        "error" in data || !Array.isArray((data as Record<string, unknown>).results)) throw new Error("Invalid SearXNG response");
+    const results: SearchResult[] = [];
+    for (const item of (data as { results: unknown[] }).results) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid search result");
+      const row = item as Record<string, unknown>;
+      if (typeof row.title !== "string" || typeof row.url !== "string" ||
+          (row.content !== undefined && typeof row.content !== "string")) throw new Error("Invalid search result fields");
+      try {
+        const url = publicHttpsUrl(row.url).href;
+        const title = textFromHtml(row.title).slice(0, 200);
+        if (!title || results.some(result => result.url === url)) continue;
+        results.push({ title, url, snippet: textFromHtml(row.content as string ?? "").slice(0, 400) });
+      } catch { /* Unsafe URLs cannot become read capabilities. */ }
+      if (results.length === 5) break;
+    }
+    if (!results.length) throw new Error("No usable public results");
+    return { results, consultedUrl: page.url };
+  }
+}
+
+export class UnavailableSearchProvider implements SearchProvider {
+  async search(_query: string, _client: SafeWebClient): Promise<{ results: SearchResult[]; consultedUrl: string }> {
+    throw new Error("No public search provider selected; use approved public URLs");
+  }
+}
+
+/** Operator-only registry; selecting a provider does not introduce automatic failover. */
+export function configuredSearchProvider(env: Record<string, string | undefined> = process.env): SearchProvider {
+  switch (env.SCOUT_SEARCH_PROVIDER ?? "none") {
+    case "none": return new UnavailableSearchProvider();
+    case "duckduckgo-html": return new DuckDuckGoHtmlProvider();
+    case "searxng":
+      if (!env.SCOUT_SEARXNG_URL) throw new Error("SCOUT_SEARXNG_URL is required for searxng");
+      return new SearxngProvider(env.SCOUT_SEARXNG_URL);
+    default: throw new Error("SCOUT_SEARCH_PROVIDER must be none, searxng or duckduckgo-html");
+  }
+}

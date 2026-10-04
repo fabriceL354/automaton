@@ -90,7 +90,13 @@ export class SafeWebClient {
   wasRead(url: string): boolean { return this.completedReads.has(url); }
   constructor(private readonly transport: WebTransport = nativeWebTransport) {}
 
+  async readSearchJson(raw: string): Promise<{ url: string; mime: string; text: string }> {
+    return this.readResponse(raw, true);
+  }
   async read(raw: string): Promise<{ url: string; mime: string; text: string }> {
+    return this.readResponse(raw, false);
+  }
+  private async readResponse(raw: string, searchJson: boolean): Promise<{ url: string; mime: string; text: string }> {
     if (this.downloadedBytes >= WEB_LIMITS.bytes) throw new Error("Web byte budget exhausted");
     let url = publicHttpsUrl(raw);
     const controller = new AbortController();
@@ -112,7 +118,7 @@ export class SafeWebClient {
           }
           if (response.status !== 200) throw new Error(`Web HTTP ${response.status}`);
           const mime = response.headers["content-type"]?.split(";")[0].trim().toLowerCase();
-          if (mime !== "text/html" && mime !== "text/plain") throw new Error("Unsupported Web MIME type");
+          if (!mime || (searchJson ? mime !== "application/json" : mime !== "text/html" && mime !== "text/plain")) throw new Error("Unsupported Web MIME type");
           const encoding = response.headers["content-encoding"];
           if (encoding && encoding !== "identity") throw new Error("Compressed Web response refused");
           if (/charset\s*=\s*["']?(?!utf-8\b|us-ascii\b)[\w-]+/i.test(response.headers["content-type"] ?? "")) throw new Error("Unsupported charset");

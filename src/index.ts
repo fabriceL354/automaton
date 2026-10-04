@@ -20,6 +20,8 @@ Environment:
   SCOUT_NUM_PREDICT       Output tokens: 64–2048 (default: 256)
   SCOUT_TIMEOUT_MS        Local inference timeout: 1000–1800000 ms (default: 300000)
   SCOUT_DEBUG_ACTIONS     1 prints rejected raw actions locally (default: 0)
+  SCOUT_SEARCH_PROVIDER   none (default), searxng or duckduckgo-html; no automatic fallback
+  SCOUT_SEARXNG_URL       Public HTTPS origin for explicitly selected SearXNG instance
   SCOUT_PUBLIC_QUERIES    JSON array of up to 3 explicitly public search queries
   SCOUT_PUBLIC_URLS       JSON array of up to 5 approved public HTTPS URLs
 `;

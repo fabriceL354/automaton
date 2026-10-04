@@ -1,7 +1,7 @@
 /** Outbound capabilities are fixed public inputs, never generated from local files. */
 import { reportBody } from "../agent/report-validation.js";
 import { publicHttpsUrl, SafeWebClient, WEB_LIMITS } from "./network.js";
-import { DuckDuckGoHtmlProvider, textFromHtml, type SearchProvider } from "./search.js";
+import { configuredSearchProvider, textFromHtml, type SearchProvider } from "./search.js";
 
 export interface PublicWebInputs { queries: string[]; urls: string[]; }
 export function publicWebInputs(env: Record<string, string | undefined> = process.env): PublicWebInputs {
@@ -24,7 +24,7 @@ export class WebResearchSession {
   private allowedUrls: Set<string>;
   private consulted = new Set<string>();
   constructor(readonly inputs: PublicWebInputs, private readonly client = new SafeWebClient(),
-    private readonly provider: SearchProvider = new DuckDuckGoHtmlProvider()) {
+    private readonly provider: SearchProvider = configuredSearchProvider()) {
     this.allowedUrls = new Set(inputs.urls.map(url => publicHttpsUrl(url).href));
   }
   instructions(): string {

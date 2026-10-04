@@ -157,24 +157,48 @@ proxy vers un service distant.
 
 ## Fournisseur de recherche
 
-`SearchProvider` isole le fournisseur derrière une petite interface.
-L’implémentation fournie est DuckDuckGo HTML, par GET, gratuite et sans clé,
-compte ou cookie. Elle utilise la version sans JavaScript décrite par le fournisseur :
-https://duckduckgo.com/duckduckgo-help-pages/features/non-javascript
+`SearchProvider` reste l’interface commune. Le registre accepte
+`SCOUT_SEARCH_PROVIDER=none` (défaut), `searxng` ou `duckduckgo-html`.
+Aucun fournisseur n’est choisi automatiquement ni remplacé après un blocage.
+La lecture directe via `SCOUT_PUBLIC_URLS` reste disponible sans moteur.
 
-Ce service n’est pas une API avec garantie de disponibilité. CAPTCHA, blocage,
-changement du HTML, absence de résultat reconnu ou redirection non sûre sont
-signalés comme recherche indisponible. Aucun contournement, formulaire,
-fournisseur payant ni fallback n’est ajouté. Les résultats sûrs sont limités
-et les destinations sont contrôlées de nouveau avant lecture.
+SearXNG est une alternative maintenable grâce à son API GET documentée :
+https://docs.searxng.org/dev/search_api.html
+Cependant beaucoup d’instances publiques désactivent JSON ou limitent les robots.
+Aucune instance publique généraliste suffisamment fiable n’a été validée ici :
+le fournisseur est donc **optionnel**, sans promesse de disponibilité. Choisir
+explicitement une instance gratuite, sans compte/authentification, dont l’opérateur
+autorise l’usage anonyme de cette API. Scout ne découvre pas d’instances et ne
+les fait pas tourner pour contourner des restrictions.
 
-Les tests utilisent des réponses HTTP simulées ; la disponibilité réelle du
-fournisseur doit être vérifiée sur la machine. Si DuckDuckGo bloque les GET,
-utiliser `SCOUT_PUBLIC_URLS` pour lire directement des sources publiques connues.
-Le contrôle réel dans cet environnement a échoué sur la résolution DNS de
-`html.duckduckgo.com` (`EAI_AGAIN`) ; aucune fiabilité matérielle du moteur n’y
-a donc été confirmée. La petite interface permet de remplacer le fournisseur ultérieurement sans
-modifier le confinement ni la couche réseau.
+```sh
+SCOUT_SEARCH_PROVIDER=searxng \
+SCOUT_SEARXNG_URL='https://votre-instance-publique-autorisée.example' \
+SCOUT_PUBLIC_QUERIES='["votre requête publique"]' \
+node dist/index.js --run
+```
+
+L’URL de configuration doit être une origine HTTPS publique sans identifiants,
+chemin, paramètres ou fragment. `/search?q=...&format=json` est construit uniquement
+par le runtime à partir d’une requête publique déjà approuvée. Seuls HTTP 200 et
+`application/json` sont acceptés pour cette API ; cette autorisation MIME spécifique
+ne s’applique pas aux lectures de pages. Tous les contrôles DNS/SSRF/redirections,
+timeouts, limites d’octets et compteurs de recherche restent partagés. Une
+redirection finale vers une autre origine est refusée comme résultat de recherche.
+Les titres/extraits sont convertis en texte et limités ; les URLs sont contrôlées
+avant de devenir des résultats indexés, puis contrôlées de nouveau avant lecture.
+
+DuckDuckGo HTML reste disponible uniquement par choix explicite pour compatibilité,
+mais le test matériel a montré HTTP 202 sans résultats reconnus. Ce statut est
+refusé, même si le corps ressemble à des résultats. CAPTCHA, HTTP 403/429/202,
+JSON/HTML inattendu, absence de résultat utile ou réponse trop volumineuse donnent
+un échec propre. Aucun contournement, cookie, navigateur, JavaScript, formulaire,
+POST, clé API, service payant ou fallback automatique n’est utilisé.
+
+Les tests des fournisseurs et du réseau sont entièrement simulés, sans Internet.
+Si la recherche échoue, utiliser des URLs publiques connues approuvées ; le rapport
+reste bloqué tant qu’aucune page utile n’a été lue. Cette limitation concerne la
+recherche générale, pas la lecture HTTPS directe déjà validée sur la machine.
 
 ## Rapport et sources
 
