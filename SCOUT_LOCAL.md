@@ -1,4 +1,4 @@
-# Scout V3 Opportunity Scout (local-only)
+# Scout V3.1 Opportunity Scout (local-only)
 
 Scout utilise Ollama local pour l’inférence et un workspace confiné pour ses
 fichiers. V2 ajoute uniquement des lectures Web publiques HTTPS. Aucun Conway,
@@ -275,7 +275,7 @@ Les commandes historiques wallet/provisionnement/setup restent bloquées.
 git diff --check
 pnpm build
 pnpm exec vitest run src/__tests__/scout-local.test.ts src/__tests__/scout-web.test.ts
-pnpm exec vitest run src/__tests__/scout-opportunity.test.ts
+pnpm exec vitest run src/__tests__/scout-opportunity.test.ts # V3/V3.1
 ```
 
 Les tests simulent HTTP, DNS, redirections, SSRF, limites, timeouts, MIME,
@@ -381,7 +381,7 @@ nom, résumé, coût de démarrage, délai, temps hebdomadaire, difficulté, ris
 potentiel de marge, scalabilité, besoins de compte/service payant, risques,
 trois premières étapes et `evidence_source_indexes` (index des sources lues,
 commençant à zéro). Les types, longueurs, scores 1–5, coûts (au plus le budget),
-index de sources et maximum de cinq opportunités sont validés avant toute
+index de sources et maximum de trois opportunités sont validés avant toute
 écriture. Une analyse vide est conservée comme « aucune opportunité viable » ;
 elle ne devient pas une promesse.
 
@@ -398,3 +398,32 @@ paiement, wallet, publication, formulaire, POST externe ou agent enfant. Le seul
 POST est l’appel local à Ollama sur la boucle locale, comme en V2. Les tests V3
 simulent entièrement les réponses HTTP et Ollama et vérifient budget, validation,
 classement, sources, absence d’opportunité et échec Web.
+
+## V3.1 — Analyse par petits appels
+
+Sur une machine CPU limitée, le mode Opportunity ne demande plus à Qwen de
+produire plusieurs opportunités complètes dans un seul JSON. Après les lectures
+Web, le runtime demande d’abord une liste courte de **trois candidats maximum**.
+Il analyse ensuite chaque candidat séparément, dans l’ordre, avec un petit appel
+Ollama et un objet minimal. Les champs libres restent courts ; les scores
+`difficulty_1_5`, `risk_1_5`, `margin_potential_1_5` et `scalability_1_5` sont des
+entiers 1–5. Le nom vient du candidat validé et les indexes de preuves sont
+fournis/contrôlés par le runtime ; une URL ou une requête n’est jamais acceptée
+à cet endroit.
+
+`SCOUT_NUM_PREDICT` reste la limite opérateur, mais V3.1 plafonne chaque petite
+étape à 128 tokens pour les candidats et 256 tokens pour une fiche. Cela évite
+qu’un réglage matériel élevé transforme une seule réponse en génération lente ou
+tronquée. `SCOUT_NUM_CTX` et `SCOUT_TIMEOUT_MS` restent appliqués à chaque appel.
+Le budget de tours interne (douze maximum) couvre la liste et les reprises ; un
+timeout ou une fiche invalide n’efface jamais les fiches déjà validées. Une fiche
+invalide est retentée au plus deux fois, tandis qu’un timeout fait passer
+immédiatement au candidat suivant. Si aucun candidat ne passe la validation,
+le runtime écrit un résultat vide explicite, sans inventer d’opportunité.
+
+`opportunities.json` est assemblé exclusivement par le runtime : coût au plus
+égal au budget, types/plages, preuves réellement lues, score déterministe,
+classement et maximum trois entrées. `rapport.txt` est ensuite généré séparément
+par le runtime, avec budget, top 3, risques, hypothèses, première expérience
+plafonnée à 10 €, recommandation et `Sources` vérifiées. Aucun achat, paiement,
+compte, publication ou dépense n’est effectué.

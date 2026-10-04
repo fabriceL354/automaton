@@ -3,8 +3,8 @@
 import { loadLocalScoutConfig, runLocalScout } from "./agent/local-runner.js";
 import { runOpportunityScout, scoutMode } from "./agent/opportunity-scout.js";
 
-const VERSION = "0.3.0";
-const HELP = `Scout V3 Opportunity Scout v${VERSION}
+const VERSION = "0.3.1";
+const HELP = `Scout V3.1 Opportunity Scout v${VERSION}
 
 Usage:
   automaton --run          Run Scout from ~/.automaton/scout-workspace/MISSION.txt
@@ -19,6 +19,7 @@ Environment:
   OLLAMA_BASE_URL          Loopback Ollama URL (default: http://127.0.0.1:11434)
   SCOUT_NUM_CTX           Context tokens: 512–8192 (default: 2048)
   SCOUT_NUM_PREDICT       Output tokens: 64–2048 (default: 256)
+                          V3.1 caps candidate/detail calls at 128/256
   SCOUT_TIMEOUT_MS        Local inference timeout: 1000–1800000 ms (default: 300000)
   SCOUT_DEBUG_ACTIONS     1 prints rejected raw actions locally (default: 0)
   SCOUT_MODE               local (default) or opportunity; no implicit fallback
@@ -45,7 +46,7 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "-v":
-      console.log(`Scout V3 Opportunity Scout v${VERSION}`);
+      console.log(`Scout V3.1 Opportunity Scout v${VERSION}`);
       return;
     case "--run": {
       const config = await loadLocalScoutConfig();
