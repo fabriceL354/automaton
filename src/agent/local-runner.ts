@@ -71,7 +71,7 @@ export async function loadLocalScoutConfig(): Promise<{ model: string; baseUrl: 
 export type ScoutAction =
   | { tool: "list_files" }
   | { tool: "read_file"; path: string }
-  | { tool: "write_file"; path?: string; content: string }
+  | { tool: "write_file"; content: string }
   | { tool: "web_search"; index: number }
   | { tool: "read_search_result"; index: number }
   | { tool: "read_public_url"; index: number };
@@ -92,16 +92,13 @@ export function parseScoutAction(raw: string): ScoutAction {
   switch (data.tool) {
     case "list_files": exact("tool"); break;
     case "read_file": exact("tool", "path"); break;
-    case "write_file":
-      if (Object.hasOwn(data, "path")) exact("tool", "path", "content");
-      else exact("tool", "content");
-      break;
+    case "write_file": exact("tool", "content"); break;
     case "web_search":
     case "read_search_result":
     case "read_public_url": exact("tool", "index"); break;
     default: throw new Error("Unknown Scout tool");
   }
-  if (data.tool === "read_file" || (data.tool === "write_file" && Object.hasOwn(data, "path"))) {
+  if (data.tool === "read_file") {
     const filePath = data.path as string;
     const normalized = path.normalize(filePath);
     if (!filePath.trim() || filePath.includes("\0") || path.isAbsolute(filePath) ||
@@ -135,7 +132,7 @@ export async function runLocalScout(options: {
     { role: "system", content: `You are Scout. Answer MISSION.txt in its requested language. Return ONE JSON action, no extra fields or text:
 {"tool":"list_files"}
 {"tool":"read_file","path":"MISSION.txt"}
-write_file: fields tool (write_file) and content (string); path is omitted to write rapport.txt.
+write_file: fields tool (write_file) and content (string); no path field allowed; runtime writes rapport.txt.
 {"tool":"web_search","index":0}
 {"tool":"read_search_result","index":0}
 {"tool":"read_public_url","index":0}
@@ -162,7 +159,7 @@ Follow runtime State. Read a source before reporting on a Web mission. Synthesiz
     try {
       action = parseScoutAction(content);
       if (action.tool === "web_search" || action.tool === "read_search_result" || action.tool === "read_public_url") web.indexedValue(action.tool, action.index);
-      if (action.tool === "write_file" && path.normalize(action.path ?? "rapport.txt") === "rapport.txt") {
+      if (action.tool === "write_file") {
         if (!web.canWriteReport()) throw new Error("Read a Web source before reporting");
         if (!validReportContent(action.content, mission) || !validReportContent(web.report(action.content), mission)) {
           if (debug === "1") console.error(content);
@@ -183,13 +180,11 @@ Follow runtime State. Read a source before reporting on a Web mission. Synthesiz
     else if (action.tool === "list_files") result = await execute(action.tool, {});
     else if (action.tool === "read_file") result = await execute(action.tool, { path: action.path });
     else {
-      const fileContent = action.tool === "write_file" && path.normalize(action.path ?? "rapport.txt") === "rapport.txt"
-        ? web.report(action.content) : action.content;
-      result = await execute(action.tool, { path: action.path ?? "rapport.txt", content: fileContent });
+      const fileContent = web.report(action.content);
+      result = await execute(action.tool, { path: "rapport.txt", content: fileContent });
     }
     options.onEvent?.(`${String(action.tool)}: ${result.startsWith("ERROR:") ? result : "completed"}`);
-    if (action.tool === "write_file" &&
-        path.normalize(action.path ?? "rapport.txt") === "rapport.txt" && result.startsWith("File written:")) {
+    if (action.tool === "write_file" && result.startsWith("File written:")) {
       // Verify via the confined read tool, then return without another model call.
       const report = await execute("read_file", { path: "rapport.txt" });
       if (!report.startsWith("ERROR:") && validReportContent(report, mission)) {

@@ -235,7 +235,8 @@ describe("Scout V2 runner integration without Internet", () => {
     await writeFile(path.join(root, "MISSION.txt"), "Recherche sur un thème public. Local secret: DO_NOT_SEND");
     await writeFile(path.join(root, "secret.txt"), "WORKSPACE_SECRET");
     vi.stubEnv("SCOUT_PUBLIC_QUERIES", '["public topic"]');
-    const transport = fake(reply(htmlResult, { "content-type": "text/html" }), reply("public article"));
+    vi.stubEnv("SCOUT_SEARCH_PROVIDER", "duckduckgo-lite");
+    const transport = fake(reply(htmlResult.replace("result__a", "result-link").replace("result__snippet", "result-snippet"), { "content-type": "text/html" }), reply("public article"));
     const original = sessionModule.WebResearchSession;
     vi.spyOn(sessionModule, "WebResearchSession").mockImplementation(inputs => new original(inputs, new SafeWebClient(transport)));
     const actions = [
@@ -245,17 +246,19 @@ describe("Scout V2 runner integration without Internet", () => {
       { tool: "read_search_result", index: 0 },
       { tool: "web_search", index: 0 },
       { tool: "read_search_result", index: 0 },
+      { tool: "write_file", path: "MISSION.txt", content: "Wrong destination" },
       { tool: "write_file", content: "actual, complete answer to MISSION.txt" },
-      { tool: "write_file", path: "rapport.txt", content: "Résumé public.\n\nSources\nhttps://fake.example/" },
+      { tool: "write_file", content: "Résumé public.\n\nSources\nhttps://fake.example/" },
     ];
     const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ message: { content: JSON.stringify(actions.shift()) } })));
     vi.stubGlobal("fetch", fetchMock);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: "http://127.0.0.1:11434", root });
-    expect(fetchMock).toHaveBeenCalledTimes(8);
+    expect(fetchMock).toHaveBeenCalledTimes(9);
     for (const [url] of fetchMock.mock.calls) expect(url).toBe("http://127.0.0.1:11434/api/chat");
     expect(transport.get).toHaveBeenCalledTimes(2);
     for (const [url] of transport.get.mock.calls) expect(url.href).not.toMatch(/WORKSPACE_SECRET|DO_NOT_SEND/);
     const report = await readFile(path.join(root, "rapport.txt"), "utf8");
+    expect(await readFile(path.join(root, "MISSION.txt"), "utf8")).toContain("DO_NOT_SEND");
     expect(report).toContain("Résumé public."); expect(report).toContain("https://example.com/article"); expect(report).not.toContain("fake.example");
   });
 });
@@ -282,7 +285,7 @@ describe("indexed Web state machine", () => {
     expect(() => session.indexedValue("read_search_result", 1)).toThrow();
     expect(await session.readIndex("read_search_result", 0)).toContain("actual source");
     expect(session.canWriteReport()).toBe(true);
-    expect(session.nextStep()).toContain("report allowed");
+    expect(session.nextStep()).toContain("write_file with content only; runtime writes rapport.txt");
     expect(session.report("Summary")).toContain("https://example.com/article");
     expect(transport.get).toHaveBeenCalledTimes(2);
   });

@@ -91,12 +91,14 @@ page vide ne débloque pas le rapport. Aucun rapport de remplacement n’est éc
 si le Web échoue ; la limite de 12 tours finit l’exécution en erreur. Sans entrée
 Web, le rapport local reste autorisé. Un ancien rapport ne satisfait pas ce garde.
 
-`write_file` sans `path` écrit exclusivement `rapport.txt`. Le format explicite
-`{"tool":"write_file","path":"notes.txt","content":"texte"}` reste accepté pour
-les fichiers confinés ; le garde du rapport s’applique aussi à tout chemin normalisé
-vers `rapport.txt`. Le prompt compact demande de synthétiser les sources, jamais de
-recopier la mission. Les Sources sont ajoutées par le runtime, et l’arrêt reste
-immédiat après relecture d’un rapport non vide.
+`write_file` accepte exclusivement `tool` et `content`, sans `path`.
+Tout champ `path` est refusé avant exécution, y compris `MISSION.txt`, `rapport.txt`
+ou un autre fichier. Le runtime fournit toujours le chemin fixe `rapport.txt`
+à l’outil interne, dont le contrat et les protections restent inchangés.
+Après lecture utile, l’étape suivante demande « write_file with content only;
+runtime writes rapport.txt ». Le modèle n’a aucun choix de destination d’écriture.
+Les Sources sont ajoutées par le runtime, et l’arrêt reste immédiat après
+relecture d’un rapport valide et non vide.
 
 Le prompt ne présente aucune valeur d’exemple pour `content`. Après une lecture
 utile, le runtime demande `write_file` avec une réponse originale fondée sur les
