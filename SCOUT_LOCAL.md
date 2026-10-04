@@ -1,12 +1,16 @@
-# Scout V1.1 locale
+# Scout V2 Web Research
 
-Cette branche exécute Scout uniquement avec Ollama local. `--run` ne démarre
-ni portefeuille, ni Conway, ni paiement, ni heartbeat, ni agent secondaire.
-Il n'y a pas de logique de crédits ou de survie dans ce parcours.
+Scout utilise Ollama local pour l’inférence et un workspace confiné pour ses
+fichiers. V2 ajoute uniquement des lectures Web publiques HTTPS. Aucun Conway,
+wallet, paiement, compte, authentification, publication, shell accessible au
+modèle, JavaScript exécuté, navigateur interactif ou binaire téléchargé/exécuté.
+Les requêtes Web sont exclusivement GET : aucun POST/PUT/PATCH/DELETE, formulaire
+soumis, cookie, jeton, corps de requête ou référent.
+L’API Ollama locale conserve son POST d’inférence ; ce POST ne va jamais au Web.
 
-## Démarrage
+## Démarrer
 
-Prérequis : Node.js 20+, pnpm 10.28.1 et Ollama lancé sur cette machine.
+Prérequis : Node.js 20+, pnpm 10.28.1, Ollama lancé localement et modèle installé.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -18,122 +22,178 @@ mkdir -p ~/.automaton/scout-workspace
 Créer `~/.automaton/scout-workspace/MISSION.txt`, par exemple :
 
 ```text
-Lis MISSION.txt. Rédige en français un court rapport sur tes capacités locales
-et tes limites. Enregistre-le dans rapport.txt avec write_file.
-N'effectue aucune action externe.
+Recherche ce que recommande la documentation publique de Node.js sur les
+versions LTS. Lis les sources proposées et rédige une synthèse courte en français
+avec les limites de ton analyse. Enregistre la réponse dans rapport.txt.
 ```
 
+Les requêtes **publiques** et les URLs de départ sont déclarées séparément de la
+mission. Cette séparation est nécessaire pour empêcher l’exfiltration des
+fichiers locaux par un modèle ou une page malveillante : Scout ne peut jamais
+construire une requête ou une URL avec du texte lu dans le workspace.
+
 ```sh
+SCOUT_PUBLIC_QUERIES='["Node.js official releases LTS documentation"]' \
+SCOUT_PUBLIC_URLS='["https://nodejs.org/en/about/previous-releases"]' \
 node dist/index.js --run
 ```
 
-La mission existante est automatiquement lue au démarrage, sans modification.
-Scout dispose uniquement de `list_files`, `read_file` et `write_file`. Les chemins
-sont relatifs à son workspace. Les liens symboliques, liens physiques multiples,
-chemins hors du workspace et fichiers de plus de 128 Kio sont refusés.
-`MISSION.txt` est protégé contre l'écriture par Scout.
+L’opérateur ne doit mettre que des données destinées à être publiques dans ces
+variables, jamais de secret, token, contenu de fichier privé ou mission sensible.
+Le runtime n’extrait aucune requête ni URL automatiquement de `MISSION.txt`.
+Ces variables ne chargent aucun fichier et ne peuvent pas être modifiées par
+Scout. Sans elles, les fichiers locaux continuent de fonctionner, mais aucun
+site ni moteur de recherche n’est accessible au modèle.
 
-Le modèle par défaut est `qwen2.5:1.5b-instruct`. Une configuration existante
-Qwen 2.5 est conservée ; un ancien choix Gemma/cloud est remplacé par ce défaut.
-Pour choisir explicitement un autre modèle **déjà installé localement** :
+| Variable | Contrat |
+| --- | --- |
+| `SCOUT_PUBLIC_QUERIES` | Tableau JSON, maximum 3 requêtes publiques exactes, chacune de 1 à 500 caractères sans caractères de contrôle |
+| `SCOUT_PUBLIC_URLS` | Tableau JSON, maximum 5 URLs HTTPS publiques de départ, chacune de 1 à 500 caractères |
+
+Une URL lue doit provenir de cette liste ou être l’URL exacte d’un résultat de
+`web_search`. Le modèle ne peut pas ajouter de paramètres, encoder des données
+locales dans un chemin, changer le domaine ni fabriquer une URL. Les liens
+arbitraires trouvés dans le corps d’une page ne sont pas ouverts automatiquement.
+Les redirections du serveur sont vérifiées par la couche réseau.
+
+## Outils et validation
+
+Seuls les cinq outils suivants sont acceptés. Chaque action est un objet JSON
+avec exactement `tool`, `path`, `content`, tous de type chaîne. Les propriétés
+supplémentaires, types incorrects, outils inconnus et arguments invalides sont
+refusés avant toute exécution.
+
+| Outil | `path` | `content` |
+| --- | --- | --- |
+| `list_files` | Vide | Vide |
+| `read_file` | Chemin relatif dans le workspace | Vide |
+| `write_file` | Chemin relatif dans le workspace | Texte à écrire |
+| `web_search` | Une requête publique exacte déclarée au démarrage | Vide |
+| `read_web_page` | Une URL HTTPS approuvée ou issue des résultats de recherche | Vide |
+
+```json
+{"tool":"web_search","path":"Node.js official releases LTS documentation","content":""}
+```
+
+```json
+{"tool":"read_web_page","path":"https://nodejs.org/en/about/previous-releases","content":""}
+```
+
+```json
+{"tool":"write_file","path":"rapport.txt","content":"La synthèse demandée, avec ses limites."}
+```
+
+Le workspace reste `~/.automaton/scout-workspace`. Chemins absolus, sorties du
+workspace, liens symboliques et fichiers avec plusieurs liens physiques sont
+refusés. Les fichiers sont limités à 128 Kio et `MISSION.txt` est protégé contre
+l’écriture par Scout. Ne pas modifier simultanément le workspace depuis un
+processus extérieur.
+
+Le texte du Web est considéré comme des données non fiables, jamais comme des
+instructions donnant des droits. Il n’est ni exécuté ni transmis à un service
+externe : il est synthétisé par Ollama local. Une page ne peut pas ajouter un
+outil, une requête publique, un header, des identifiants ou une URL construite
+par le modèle aux capacités autorisées.
+
+## Réseau et limites par exécution
+
+| Protection | Limite |
+| --- | --- |
+| Protocole / port | HTTPS uniquement, port 443, sans identifiants ni mot de passe |
+| Adresses | Refus de localhost, loopback, privé, link-local, multicast, réservées/documentation, IPv4 mappé et tunnels IPv6 |
+| DNS | Toutes les réponses doivent être publiques ; adresse validée fixée sur la connexion TLS, sans seconde résolution |
+| Redirections | Maximum 3 par lecture ; contrôle URL et DNS à chaque saut, y compris changement de domaine |
+| Timeout Web | 15 secondes pour toute la lecture, DNS/connexion/redirections/corps compris |
+| Taille par réponse | 256 Kio maximum, vérifiés en en-tête et en streaming |
+| Budget de corps téléchargés | 1 Mio cumulé ; arrêt dès dépassement et aucune nouvelle requête après épuisement |
+| Recherches | Maximum 3, échecs inclus |
+| Pages | Maximum 5, échecs inclus |
+| Résultats par recherche | Maximum 5, titre/URL/extrait structurés |
+| Texte transmis au modèle | Maximum 6000 caractères par page, HTML/scripts/styles retirés |
+| Tours du modèle | Maximum 12, actions refusées comprises |
+
+Un échec réseau/DNS, une réponse non reconnue ou une limite dépassée est refusé.
+Seuls `text/html` et `text/plain` UTF-8/ASCII sont lus. PDF, images, archives,
+binaires, scripts, JSON, compression et autres MIME sont refusés. Aucun sous-
+fichier, image, script ou ressource d’une page n’est téléchargé.
+
+L’API Ollama est séparée de la couche Web : elle reste limitée aux IP loopback
+`127.0.0.1` et `::1`. `localhost` est normalisé en `127.0.0.1` et ses redirections
+HTTP sont refusées. Utiliser un Ollama local de confiance, sans modèle cloud ni
+proxy vers un service distant.
+
+## Fournisseur de recherche
+
+`SearchProvider` isole le fournisseur derrière une petite interface.
+L’implémentation fournie est DuckDuckGo HTML, par GET, gratuite et sans clé,
+compte ou cookie. Elle utilise la version sans JavaScript décrite par le fournisseur :
+https://duckduckgo.com/duckduckgo-help-pages/features/non-javascript
+
+Ce service n’est pas une API avec garantie de disponibilité. CAPTCHA, blocage,
+changement du HTML, absence de résultat reconnu ou redirection non sûre sont
+signalés comme recherche indisponible. Aucun contournement, formulaire,
+fournisseur payant ni fallback n’est ajouté. Les résultats sûrs sont limités
+et les destinations sont contrôlées de nouveau avant lecture.
+
+Les tests utilisent des réponses HTTP simulées ; la disponibilité réelle du
+fournisseur doit être vérifiée sur la machine. Si DuckDuckGo bloque les GET,
+utiliser `SCOUT_PUBLIC_URLS` pour lire directement des sources publiques connues.
+Le contrôle réel dans cet environnement a échoué sur la résolution DNS de
+`html.duckduckgo.com` (`EAI_AGAIN`) ; aucune fiabilité matérielle du moteur n’y
+a donc été confirmée. La petite interface permet de remplacer le fournisseur ultérieurement sans
+modifier le confinement ni la couche réseau.
+
+## Rapport et sources
+
+`MISSION.txt` est chargé automatiquement au démarrage. Le modèle doit répondre
+réellement à la mission, et expliquer les informations manquantes ou capacités
+indisponibles au lieu de prétendre avoir réussi.
+
+La section `Sources` est construite par le runtime, à partir des pages ou pages
+de résultats du moteur effectivement lues avec succès. Une URL de résultat non
+ouverte n’est pas une source consultée. Les redirections donnent l’URL finale.
+La section proposée par le modèle est remplacée et les URLs HTTP(S) non
+consultées dans le texte sont retirées. Sans consultation réussie, le rapport
+l’indique ; aucune source n’est inventée. Le runtime ne garantit pas la qualité
+factuelle de la synthèse du petit modèle.
+
+Scout termine immédiatement après `write_file` réussi sur `rapport.txt`, relecture
+confinée et vérification d’une réponse non vide. La seule section Sources ne
+suffit pas à transformer un rapport vide en succès. Aucun `finish` ni autre appel
+au modèle n’est nécessaire. Un ancien rapport ne suffit pas.
+
+## Réglages CPU et inférence
+
+Le défaut reste `qwen2.5:1.5b-instruct`, avec `format:"json"` d’Ollama et validation
+stricte côté runtime. Un modèle cloud ou un ancien choix Gemma n’est pas utilisé
+comme fallback. Pour le choix rapide manuel :
 
 ```sh
 ollama pull qwen2.5:0.5b-instruct
 SCOUT_MODEL=qwen2.5:0.5b-instruct node dist/index.js --run
 ```
 
-## Réglages pour une petite machine CPU
+| Variable | Défaut | Plage autorisée |
+| --- | ---: | ---: |
+| `SCOUT_NUM_CTX` | 2048 | 512 à 8192 tokens |
+| `SCOUT_NUM_PREDICT` | 256 | 64 à 2048 tokens, enveloppe JSON comprise |
+| `SCOUT_TIMEOUT_MS` | 300000 | 1000 à 1800000 millisecondes, par requête Ollama locale |
 
-Les valeurs par défaut réduisent le contexte et la longueur de génération pour
-une machine CPU avec environ 3 Go de RAM. Le modèle principal reste
-`qwen2.5:1.5b-instruct` ; le choix rapide `qwen2.5:0.5b-instruct` reste explicite,
-sans changement automatique de modèle en cas d’erreur.
+Les entiers doivent être décimaux canoniques, sans espaces, signe, décimales,
+exposant ni zéro initial. Une variable vide ou invalide arrête Scout avant
+l’inférence. Conserver des missions et rapports courts avec les valeurs par
+défaut ; les pages et l’historique consomment aussi le contexte de 2048 tokens.
+Ces réglages ne constituent pas une garantie de consommation mémoire sur 3 Go.
+Les commandes historiques wallet/provisionnement/setup restent bloquées.
 
-| Variable | Défaut | Plage autorisée | Effet |
-| --- | ---: | ---: | --- |
-| `SCOUT_NUM_CTX` | 2048 | 512 à 8192 | Taille du contexte Ollama en tokens |
-| `SCOUT_NUM_PREDICT` | 256 | 64 à 2048 | Maximum de tokens générés par requête, JSON compris |
-| `SCOUT_TIMEOUT_MS` | 300000 | 1000 à 1800000 | Délai maximum par requête en millisecondes |
-
-```sh
-SCOUT_NUM_CTX=2048 SCOUT_NUM_PREDICT=256 SCOUT_TIMEOUT_MS=300000 node dist/index.js --run
-```
-
-Une variable absente utilise le défaut. Une variable définie doit contenir un
-entier décimal dans la plage indiquée, sans espaces, signe, décimales, exposant
-ou zéro initial. Une valeur vide ou invalide arrête Scout avant tout appel
-Ollama ; aucune correction silencieuse n’est appliquée.
-
-Garder les missions, fichiers consultés et rapports courts avec ces défauts.
-Le contexte inclut le prompt, la mission et l’historique ; les 256 tokens de
-sortie incluent l’enveloppe JSON de l’action. Augmenter les limites pour une
-mission plus longue consomme davantage de mémoire et de temps. Ces réglages
-ne garantissent pas que le modèle tiendra dans 3 Go : cela dépend aussi de
-sa quantification, d’Ollama et de la mémoire utilisée par le système.
-
-Les requêtes utilisent `format: "json"` d’Ollama, sans JSON Schema contraint.
-Ce choix suit le test matériel fourni : le modèle 1.5B répondait avec le mode
-JSON simple, alors que le schema contraint dépassait le timeout. Le plafond
-par défaut de 256 tokens favorise les rapports courts ; `SCOUT_NUM_PREDICT=128`
-reste possible pour une mission très courte.
-
-Avant toute exécution d’une action du modèle, le runtime exige un unique objet
-JSON avec exactement trois propriétés `tool`, `path`, `content`, toutes de type
-chaîne. Aucun champ supplémentaire, outil inconnu, objet imbriqué, tableau,
-valeur null ou conversion automatique n’est accepté.
-
-```json
-{"tool":"list_files","path":"","content":""}
-```
-
-```json
-{"tool":"read_file","path":"MISSION.txt","content":""}
-```
-
-```json
-{"tool":"write_file","path":"rapport.txt","content":"La réponse complète à la mission."}
-```
-
-`list_files` exige deux arguments vides ; `read_file` exige un chemin relatif
-non vide et un contenu vide ; `write_file` exige un chemin relatif non vide et
-un contenu texte. Les chemins absolus, avec caractère nul ou sortant du
-workspace sont rejetés avant exécution. Les outils vérifient ensuite le
-confinement et les liens comme auparavant. Une action invalide n’exécute aucun
-outil ; Scout reçoit une consigne de correction dans la limite des 12 tours.
-Les outils natifs du modèle ne sont pas utilisés. Aucun texte du modèle n’est
-interprété comme une commande shell.
-
-`OLLAMA_BASE_URL` ou `ollamaBaseUrl` dans `~/.automaton/automaton.json` peut
-choisir le port local. Seules les IP loopback `127.0.0.1` et `::1` sont autorisées ;
-`localhost` est normalisé en `127.0.0.1`. Les redirections HTTP sont refusées.
-Ne pas configurer Ollama en proxy vers un service distant et ne pas utiliser de
-modèle cloud : ce runtime suppose un serveur Ollama local de confiance.
-
-Scout termine immédiatement après une écriture réussie de `rapport.txt` :
-le runtime relit le fichier via son outil confiné et vérifie qu’il est non vide.
-Aucune action `finish` ni nouvel appel au modèle n’est nécessaire. Le prompt
-demande que le fichier contienne la réponse complète à `MISSION.txt`, plutôt
-qu’un simple message annonçant que le rapport est prêt.
-Un ancien rapport ne suffit pas. Maximum : 12 tours ; timeout par requête de
-300 secondes par défaut, réglable avec `SCOUT_TIMEOUT_MS`.
-Une erreur Ollama n'entraîne aucun repli vers un autre fournisseur. Si le modèle
-est absent, l'installer avec `ollama pull` puis relancer Scout.
-
-Les commandes historiques de provisionnement, configuration et wallet sont
-bloquées dans cette branche. `--help` et `--version` restent disponibles.
-Le runtime ne lance pas de boucle de fond après le rapport. Relancer `--run`
-pour une nouvelle mission. Le workspace doit rester privé et ne pas être modifié
-concurremment par un autre processus pendant l'exécution.
-
-## Vérifications
+## Vérification sans Internet
 
 ```sh
 git diff --check
 pnpm build
-pnpm exec vitest run src/__tests__/scout-local.test.ts
+pnpm exec vitest run src/__tests__/scout-local.test.ts src/__tests__/scout-web.test.ts
 ```
 
-Les tests utilisent un Ollama simulé : ils vérifient le parcours mission → outils
-→ rapport, le confinement, l'absence de réussite fictive et l'absence de repli
-réseau, les actions JSON invalides et les arguments interdits, ainsi que les défauts, bornes et valeurs invalides des réglages CPU.
-Ils ne mesurent pas la qualité du vrai modèle sur le matériel utilisateur.
+Les tests simulent HTTP, DNS, redirections, SSRF, limites, timeouts, MIME,
+recherche, extraction, exfiltration refusée, validation des actions, sources et
+parcours mission → recherche → lecture → rapport. Ils ne dépendent pas d’Internet.

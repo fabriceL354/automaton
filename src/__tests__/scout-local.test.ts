@@ -17,7 +17,7 @@ const call = (name: string, args: Record<string, unknown> = {}) =>
 const reply = (action: unknown) => new Response(JSON.stringify({ message: { content: JSON.stringify(action) } }), { status: 200 });
 
 beforeEach(async () => {
-  for (const name of ["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS"]) vi.stubEnv(name, undefined);
+  for (const name of ["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS", "SCOUT_PUBLIC_QUERIES", "SCOUT_PUBLIC_URLS"]) vi.stubEnv(name, undefined);
   temp = await mkdtemp(path.join(os.tmpdir(), "scout-test-"));
   root = path.join(temp, "workspace");
   await mkdir(root);
@@ -111,7 +111,7 @@ describe("Scout CPU settings", () => {
     expect(timeout).toHaveBeenCalledTimes(1);
     expect(timeout).toHaveBeenCalledWith(600_000);
     expect(request.signal).toBe(timeout.mock.results[0].value);
-    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("report");
+    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("report\n\nSources\nAucune source Web consultée avec succès.\n");
   });
   it.each(["SCOUT_NUM_CTX", "SCOUT_NUM_PREDICT", "SCOUT_TIMEOUT_MS"])("fails before inference on invalid %s", async (name) => {
     vi.stubEnv(name, "invalid");
@@ -196,7 +196,7 @@ describe("Scout JSON action validation", () => {
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root, maxTurns: 2 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fetchMock.mock.calls[1][1].body).messages.at(-1).content).toContain("action rejected");
-    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("2 + 2 = 4.");
+    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("2 + 2 = 4.\n\nSources\nAucune source Web consultée avec succès.\n");
   });
 });
 
@@ -216,7 +216,7 @@ describe("Scout local runtime", () => {
       .mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "Scout local opérationnel" }));
     vi.stubGlobal("fetch", fetchMock);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root });
-    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("Scout local opérationnel");
+    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("Scout local opérationnel\n\nSources\nAucune source Web consultée avec succès.\n");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [url, request] of fetchMock.mock.calls) {
       expect(url).toBe("http://127.0.0.1:11434/api/chat");
@@ -239,7 +239,7 @@ describe("Scout local runtime", () => {
     vi.stubGlobal("fetch", fetchMock);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root, maxTurns: 1, onEvent: events });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("2 + 2 = 4.");
+    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("2 + 2 = 4.\n\nSources\nAucune source Web consultée avec succès.\n");
     expect(events).toHaveBeenCalledWith("Scout completed: rapport.txt verified.");
   });
   it("retries a whitespace-only report instead of announcing success", async () => {
@@ -339,7 +339,7 @@ describe("Scout CLI integration", () => {
       expect(requests[0].body.model).toBe(DEFAULT_SCOUT_MODEL);
       expect(requests[0].body.format).toBe("json");
       expect(requests[0].body.options).toEqual({ temperature: 0, num_ctx: 2048, num_predict: 256 });
-      expect(await readFile(path.join(workspace, "rapport.txt"), "utf8")).toBe("Rapport du test CLI");
+      expect(await readFile(path.join(workspace, "rapport.txt"), "utf8")).toBe("Rapport du test CLI\n\nSources\nAucune source Web consultée avec succès.\n");
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
