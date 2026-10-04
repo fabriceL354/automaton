@@ -7,7 +7,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { createLocalWorkspaceTools } from "../agent/local-tools.js";
 import * as localTools from "../agent/local-tools.js";
-import { localOllamaUrl, runLocalScout, loadLocalScoutConfig, DEFAULT_SCOUT_MODEL, loadLocalScoutSettings } from "../agent/local-runner.js";
+import { localOllamaUrl, runLocalScout, loadLocalScoutConfig, DEFAULT_SCOUT_MODEL, loadLocalScoutSettings, parseScoutAction } from "../agent/local-runner.js";
 
 let temp: string;
 let root: string;
@@ -63,8 +63,8 @@ describe("Scout local workspace security", () => {
 });
 
 describe("Scout CPU settings", () => {
-  it("defaults to 2048 context tokens, 512 output tokens and 300 seconds", () => {
-    expect(loadLocalScoutSettings({})).toEqual({ numCtx: 2048, numPredict: 512, timeoutMs: 300_000 });
+  it("defaults to 2048 context tokens, 256 output tokens and 300 seconds", () => {
+    expect(loadLocalScoutSettings({})).toEqual({ numCtx: 2048, numPredict: 256, timeoutMs: 300_000 });
   });
   it.each([
     ["SCOUT_NUM_CTX", "numCtx", 512, 8192],
@@ -88,13 +88,13 @@ describe("Scout CPU settings", () => {
     vi.stubGlobal("fetch", fetchMock);
     await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root });
     const request = fetchMock.mock.calls[0][1];
-    expect(JSON.parse(request.body).options).toEqual({ temperature: 0, num_ctx: 2048, num_predict: 512 });
+    expect(JSON.parse(request.body).options).toEqual({ temperature: 0, num_ctx: 2048, num_predict: 256 });
     expect(timeout).toHaveBeenCalledTimes(1);
     expect(timeout).toHaveBeenCalledWith(300_000);
     expect(request.signal).toBe(timeout.mock.results[0].value);
   });
   it("passes env overrides and the fast local model unchanged, then stops after the report", async () => {
-    vi.stubEnv("SCOUT_NUM_CTX", "1024"); vi.stubEnv("SCOUT_NUM_PREDICT", "256"); vi.stubEnv("SCOUT_TIMEOUT_MS", "600000");
+    vi.stubEnv("SCOUT_NUM_CTX", "1024"); vi.stubEnv("SCOUT_NUM_PREDICT", "128"); vi.stubEnv("SCOUT_TIMEOUT_MS", "600000");
     vi.stubEnv("SCOUT_MODEL", "qwen2.5:0.5b-instruct"); vi.stubEnv("OLLAMA_BASE_URL", "");
     vi.spyOn(os, "homedir").mockReturnValue(temp);
     await writeFile(path.join(root, "MISSION.txt"), "report");
@@ -107,7 +107,7 @@ describe("Scout CPU settings", () => {
     const request = fetchMock.mock.calls[0][1];
     const body = JSON.parse(request.body);
     expect(body.model).toBe("qwen2.5:0.5b-instruct");
-    expect(body.options).toEqual({ temperature: 0, num_ctx: 1024, num_predict: 256 });
+    expect(body.options).toEqual({ temperature: 0, num_ctx: 1024, num_predict: 128 });
     expect(timeout).toHaveBeenCalledTimes(1);
     expect(timeout).toHaveBeenCalledWith(600_000);
     expect(request.signal).toBe(timeout.mock.results[0].value);
@@ -128,6 +128,75 @@ describe("Scout CPU settings", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:11434/api/chat");
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).model).toBe(DEFAULT_SCOUT_MODEL);
+  });
+});
+
+describe("Scout JSON action validation", () => {
+  it.each([
+    { tool: "list_files", path: "", content: "" },
+    { tool: "read_file", path: "MISSION.txt", content: "" },
+    { tool: "write_file", path: "./rapport.txt", content: "2 + 2 = 4." },
+  ])("accepts the exact contract for $tool", (action) => {
+    expect(parseScoutAction(JSON.stringify(action))).toEqual(action);
+  });
+  const validWrite = { tool: "write_file", path: "rapport.txt", content: "overwrite" };
+  const invalid = [
+    "", "not JSON", '{"tool":"write_file"',
+    '```json\n{"tool":"write_file","path":"rapport.txt","content":"bad"}\n```',
+    JSON.stringify(null), JSON.stringify([]), JSON.stringify([validWrite]),
+    JSON.stringify("write_file"), JSON.stringify(42), JSON.stringify(true),
+    JSON.stringify({}), JSON.stringify({ tool: "write_file", path: "rapport.txt" }),
+    JSON.stringify({ path: "rapport.txt", content: "bad" }),
+    JSON.stringify({ tool: "exec", path: "", content: "curl remote" }),
+    JSON.stringify({ ...validWrite, tool: "fetch" }),
+    JSON.stringify({ ...validWrite, tool: "topup_credits" }),
+    JSON.stringify({ ...validWrite, tool: "finish" }),
+    JSON.stringify({ ...validWrite, tool: "constructor" }),
+    JSON.stringify({ ...validWrite, tool: 1 }),
+    JSON.stringify({ ...validWrite, tool: null }),
+    JSON.stringify({ ...validWrite, tool: ["write_file"] }),
+    JSON.stringify({ ...validWrite, path: 1 }),
+    JSON.stringify({ ...validWrite, path: null }),
+    JSON.stringify({ ...validWrite, path: ["rapport.txt"] }),
+    JSON.stringify({ ...validWrite, content: 42 }),
+    JSON.stringify({ ...validWrite, content: null }),
+    JSON.stringify({ ...validWrite, content: { text: "bad" } }),
+    JSON.stringify({ ...validWrite, content: ["bad"] }),
+    JSON.stringify({ ...validWrite, extra: "unexpected" }),
+    JSON.stringify({ ...validWrite, arguments: { path: "rapport.txt", content: "bad" } }),
+    '{"tool":"write_file","path":"rapport.txt","content":"bad","__proto__":{}}',
+    JSON.stringify({ tool: "list_files", path: "rapport.txt", content: "" }),
+    JSON.stringify({ tool: "list_files", path: "", content: "bad" }),
+    JSON.stringify({ tool: "read_file", path: "MISSION.txt", content: "bad" }),
+    ...["", " ", ".", "..", "../rapport.txt", "dir/../../rapport.txt", "/tmp/rapport.txt", "rapport\0.txt"].map(file => JSON.stringify({ ...validWrite, path: file })),
+  ];
+  it.each(invalid)("rejects action %j before any model-directed tool execution", async (raw) => {
+    await writeFile(path.join(root, "MISSION.txt"), "report");
+    await writeFile(path.join(root, "rapport.txt"), "old report");
+    const original = localTools.createLocalWorkspaceTools;
+    const executed: string[] = [];
+    vi.spyOn(localTools, "createLocalWorkspaceTools").mockImplementation(workspace =>
+      original(workspace).map(tool => ({ ...tool, execute: async (args, context) => {
+        executed.push(tool.name);
+        return tool.execute(args, context);
+      } })));
+    const events = vi.fn();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ message: { content: raw } }))));
+    await expect(runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root, maxTurns: 1, onEvent: events })).rejects.toThrow("limit");
+    expect(executed).toEqual(["list_files", "read_file"]); // Startup only.
+    expect(events).toHaveBeenCalledWith("ERROR: invalid Scout action rejected before tool execution");
+    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("old report");
+  });
+  it("can correct a rejected action and finish after one validated report write", async () => {
+    await writeFile(path.join(root, "MISSION.txt"), "Combien font 2 + 2 ?");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "bad", extra: true }))
+      .mockResolvedValueOnce(reply({ tool: "write_file", path: "rapport.txt", content: "2 + 2 = 4." }));
+    vi.stubGlobal("fetch", fetchMock);
+    await runLocalScout({ model: DEFAULT_SCOUT_MODEL, baseUrl: localOllamaUrl(), root, maxTurns: 2 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).messages.at(-1).content).toContain("action rejected");
+    expect(await readFile(path.join(root, "rapport.txt"), "utf8")).toBe("2 + 2 = 4.");
   });
 });
 
@@ -158,7 +227,7 @@ describe("Scout local runtime", () => {
       expect(body.messages[0].content).not.toMatch(/credits critically low/i);
       expect(body.messages[0].content).toContain("actual, complete answer to MISSION.txt");
       expect(body.messages[0].content).toContain("Do not write a status-only message");
-      expect(body.format.properties.tool.enum).toEqual(["list_files", "read_file", "write_file"]);
+      expect(body.format).toBe("json");
     }
   });
   it("succeeds on the last allowed turn and preserves the first report without another inference", async () => {
@@ -268,7 +337,8 @@ describe("Scout CLI integration", () => {
       expect(requests.map(r => r.url)).toEqual(["/api/chat", "/api/chat"]);
       expect(requests[0].body.messages[1].content).toContain("Mission intégration CLI");
       expect(requests[0].body.model).toBe(DEFAULT_SCOUT_MODEL);
-      expect(requests[0].body.options).toEqual({ temperature: 0, num_ctx: 2048, num_predict: 512 });
+      expect(requests[0].body.format).toBe("json");
+      expect(requests[0].body.options).toEqual({ temperature: 0, num_ctx: 2048, num_predict: 256 });
       expect(await readFile(path.join(workspace, "rapport.txt"), "utf8")).toBe("Rapport du test CLI");
     } finally {
       server.closeAllConnections();

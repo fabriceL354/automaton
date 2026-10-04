@@ -52,11 +52,11 @@ sans changement automatique de modèle en cas d’erreur.
 | Variable | Défaut | Plage autorisée | Effet |
 | --- | ---: | ---: | --- |
 | `SCOUT_NUM_CTX` | 2048 | 512 à 8192 | Taille du contexte Ollama en tokens |
-| `SCOUT_NUM_PREDICT` | 512 | 64 à 2048 | Maximum de tokens générés par requête, JSON compris |
+| `SCOUT_NUM_PREDICT` | 256 | 64 à 2048 | Maximum de tokens générés par requête, JSON compris |
 | `SCOUT_TIMEOUT_MS` | 300000 | 1000 à 1800000 | Délai maximum par requête en millisecondes |
 
 ```sh
-SCOUT_NUM_CTX=2048 SCOUT_NUM_PREDICT=512 SCOUT_TIMEOUT_MS=300000 node dist/index.js --run
+SCOUT_NUM_CTX=2048 SCOUT_NUM_PREDICT=256 SCOUT_TIMEOUT_MS=300000 node dist/index.js --run
 ```
 
 Une variable absente utilise le défaut. Une variable définie doit contenir un
@@ -65,15 +65,43 @@ ou zéro initial. Une valeur vide ou invalide arrête Scout avant tout appel
 Ollama ; aucune correction silencieuse n’est appliquée.
 
 Garder les missions, fichiers consultés et rapports courts avec ces défauts.
-Le contexte inclut le prompt, la mission et l’historique ; les 512 tokens de
+Le contexte inclut le prompt, la mission et l’historique ; les 256 tokens de
 sortie incluent l’enveloppe JSON de l’action. Augmenter les limites pour une
 mission plus longue consomme davantage de mémoire et de temps. Ces réglages
 ne garantissent pas que le modèle tiendra dans 3 Go : cela dépend aussi de
 sa quantification, d’Ollama et de la mémoire utilisée par le système.
 
-Les actions utilisent le format JSON structuré d'Ollama, puis sont validées et
-exécutées par le runtime. Cela évite de dépendre du support natif des tools par
-le petit modèle. Aucun texte du modèle n'est interprété comme une commande shell.
+Les requêtes utilisent `format: "json"` d’Ollama, sans JSON Schema contraint.
+Ce choix suit le test matériel fourni : le modèle 1.5B répondait avec le mode
+JSON simple, alors que le schema contraint dépassait le timeout. Le plafond
+par défaut de 256 tokens favorise les rapports courts ; `SCOUT_NUM_PREDICT=128`
+reste possible pour une mission très courte.
+
+Avant toute exécution d’une action du modèle, le runtime exige un unique objet
+JSON avec exactement trois propriétés `tool`, `path`, `content`, toutes de type
+chaîne. Aucun champ supplémentaire, outil inconnu, objet imbriqué, tableau,
+valeur null ou conversion automatique n’est accepté.
+
+```json
+{"tool":"list_files","path":"","content":""}
+```
+
+```json
+{"tool":"read_file","path":"MISSION.txt","content":""}
+```
+
+```json
+{"tool":"write_file","path":"rapport.txt","content":"La réponse complète à la mission."}
+```
+
+`list_files` exige deux arguments vides ; `read_file` exige un chemin relatif
+non vide et un contenu vide ; `write_file` exige un chemin relatif non vide et
+un contenu texte. Les chemins absolus, avec caractère nul ou sortant du
+workspace sont rejetés avant exécution. Les outils vérifient ensuite le
+confinement et les liens comme auparavant. Une action invalide n’exécute aucun
+outil ; Scout reçoit une consigne de correction dans la limite des 12 tours.
+Les outils natifs du modèle ne sont pas utilisés. Aucun texte du modèle n’est
+interprété comme une commande shell.
 
 `OLLAMA_BASE_URL` ou `ollamaBaseUrl` dans `~/.automaton/automaton.json` peut
 choisir le port local. Seules les IP loopback `127.0.0.1` et `::1` sont autorisées ;
@@ -107,5 +135,5 @@ pnpm exec vitest run src/__tests__/scout-local.test.ts
 
 Les tests utilisent un Ollama simulé : ils vérifient le parcours mission → outils
 → rapport, le confinement, l'absence de réussite fictive et l'absence de repli
-réseau, ainsi que les défauts, bornes et valeurs invalides des réglages CPU.
+réseau, les actions JSON invalides et les arguments interdits, ainsi que les défauts, bornes et valeurs invalides des réglages CPU.
 Ils ne mesurent pas la qualité du vrai modèle sur le matériel utilisateur.
