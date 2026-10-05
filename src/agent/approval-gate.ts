@@ -55,7 +55,7 @@ interface Denial {
   human_reference: string;
   status: "denied";
 }
-interface RecordEntry { request: ApprovalRequest; decision: Approval | Denial | null }
+export interface RecordEntry { request: ApprovalRequest; decision: Approval | Denial | null }
 interface State { version: 6; workspace: string; records: RecordEntry[] }
 export type ApprovalCommand = { kind: "run" | "new-request" } | { kind: "approve" | "deny"; requestId: string };
 
@@ -318,4 +318,34 @@ export async function runApprovalScout(options: { root?: string; command?: Appro
     options.onEvent?.(`Scout V6: ${entry.request.status}; ${entry.request.request_id}. Authorization only; no external action or expense.`);
     return entry.request;
   });
+}
+
+/** Read-only trusted-host verification for V7. Caller must hold the shared V5 lock.
+ * Historical verification does not grant current approval: current binding must
+ * ALSO be checked before recording a positive expense against today's ledger.
+ */
+export async function readVerifiedApprovalRecords(root: string): Promise<RecordEntry[] | undefined> {
+  const store = approvalStoreRoot(root);
+  try { await fs.lstat(store); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    await views(root);
+    return undefined;
+  }
+  await safePath(store, STATE);
+  if (((await fs.stat(store)).mode & 0o077) !== 0) throw new Error("Approval store must be private (0700)");
+  const keyRaw = await readConfined(store, KEY, 65);
+  const stateRaw = await readConfined(store, STATE, MAX_BYTES);
+  if (keyRaw === undefined || stateRaw === undefined || !/^[a-f0-9]{64}\n$/.test(keyRaw)) throw new Error("Incomplete approval integrity anchor");
+  if (((await fs.stat(await safePath(store, KEY))).mode & 0o077) !== 0) throw new Error("Approval integrity key must be private (0600)");
+  const state = parseState(stateRaw, root, Buffer.from(keyRaw.trim(), "hex"));
+  await views(root, state.records.at(-1));
+  return state.records;
+}
+
+/** Current V4/V5 binding, with all existing V6 checks unchanged. No mutations. */
+export async function verifyCurrentApprovalBinding(root: string, record: RecordEntry): Promise<void> {
+  const request = parseRequest(record.request);
+  parseDecision(record.decision, request);
+  ensureCurrent(request, await readInputs(root));
 }

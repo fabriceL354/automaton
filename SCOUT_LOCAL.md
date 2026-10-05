@@ -1,4 +1,4 @@
-# Scout V6 Approval Gate (local-only)
+# Scout V7 Revenue Loop (local-only)
 
 Scout utilise Ollama local pour l’inférence et un workspace confiné pour ses
 fichiers. V2 ajoute uniquement des lectures Web publiques HTTPS. Aucun Conway,
@@ -12,7 +12,7 @@ L’API Ollama locale conserve son POST d’inférence ; ce POST ne va jamais au
 
 Prérequis : Node.js 20+, pnpm 10.28.1. Les modes local/opportunity/experiment
 nécessitent aussi Ollama lancé localement et un modèle installé. Les modes
-ledger/approval ne nécessitent ni Ollama, ni mission, ni réseau.
+ledger/approval/revenue ne nécessitent ni Ollama, ni mission, ni réseau.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -872,3 +872,234 @@ liaisons V4/V5, montants et capacités, corruption/falsification, liens dangereu
 échecs d'écriture, concurrence, invariance du ledger et CLI sans Ollama.
 Ces tests utilisent des fixtures temporaires. La validation matérielle sur
 Chromebook reste distincte et doit être effectuée après intégration.
+
+## V7 — Revenue Loop supervisée, comptabilité sans exécution
+
+`SCOUT_MODE=revenue` enregistre uniquement les montants **réalisés et déclarés
+explicitement par l'humain**. Aucun modèle, aucune banque, aucun paiement,
+transfert, achat, compte, publication, message ou API externe n'est appelé.
+La présence d'une approval n'est jamais une preuve de dépense et ne crée aucun
+événement à elle seule. V7 ne vérifie pas automatiquement la déclaration humaine
+auprès d'une banque. Aucun montant ne peut provenir d'Ollama, d'une mission,
+d'un fichier de commandes ou d'une variable d'environnement.
+
+### Premier test Chromebook : aperçu sans clôture
+
+Après intégration sur `local-ollama-only`, depuis le dépôt :
+
+```sh
+pnpm build
+pnpm exec vitest run src/__tests__/scout-revenue.test.ts
+cat ~/.automaton/scout-workspace/approval-request.json
+```
+
+Copier **experiment_id** (64 caractères hexadécimaux), et non request_id,
+depuis la demande V6. Remplacer `EXPERIMENT_ID_EXACT` dans cette commande :
+
+```sh
+SCOUT_MODE=revenue node dist/index.js \
+  --record-result EXPERIMENT_ID_EXACT \
+  --expense-cents 0 \
+  --revenue-cents 0 \
+  --outcome cancelled \
+  --preview
+```
+
+L'aperçu utilise les mêmes contrôles que l'enregistrement. Il n'écrit ni ledger,
+ni résultat, ni rapport, ni historique/clé V7. Il prend seulement le verrou
+exclusif V5 pendant la lecture, puis le retire. Les montants affichés sont
+**projetés**, sans confirmation comptable. La suppression de `--preview` constitue
+la commande humaine de clôture ; elle ne doit pas être faite pour une simple
+simulation. Il n'existe pas de mode qui injecte silencieusement de faux revenus.
+
+Pour l'état matériel annoncé, l'aperçu zéro/zéro doit afficher une libération
+**projetée de 10 EUR** et un disponible **projeté de 100 EUR**. Le fichier réel
+doit toujours rester à 100 EUR initial, 90 EUR disponibles, 10 EUR réservés,
+0 EUR de dépenses/revenus/résultat net. Vérifier :
+
+```sh
+cat ~/.automaton/scout-workspace/economic-ledger.json
+```
+
+Les tests Vitest utilisent des workspaces temporaires isolés et n'altèrent pas
+le workspace réel. C'est la méthode recommandée pour tester un scénario fictif
+7 EUR / 25 EUR. Pour annuler réellement l'expérience locale sans frais ni revenu,
+relire l'aperçu puis exécuter la même commande **sans `--preview`** : la réservation
+sera effectivement libérée dans le ledger et l'expérience définitivement clôturée.
+Cela n'exécute toujours aucune transaction externe.
+
+### Enregistrer un résultat réellement confirmé
+
+Exemple uniquement si l'humain confirme avoir effectivement dépensé 7 EUR et
+reçu 25 EUR en dehors de Scout. Copier aussi le **request_id** précis de V6 :
+
+```sh
+SCOUT_MODE=revenue node dist/index.js \
+  --record-result EXPERIMENT_ID_EXACT \
+  --expense-cents 700 \
+  --revenue-cents 2500 \
+  --outcome success \
+  --approval-request-id REQUEST_ID_EXACT \
+  --preview
+```
+
+Après examen, répéter sans `--preview` uniquement pour confirmer ces montants
+réalisés. Les placeholders ci-dessus, `latest`, `all`, `*`, `yes` et les phrases
+libres sont refusés. L'identifiant d'expérience, les deux montants et l'outcome
+sont obligatoires, même lorsque les montants sont nuls. Champs inconnus ou
+dupliqués refusés. Outcomes acceptés : `success`, `partial`, `failed`, `cancelled`.
+Le choix de l'outcome est humain ; le runtime n'invente pas un succès à partir
+d'un revenu positif. Une expérience annulée peut avoir occasionné des frais.
+
+Pour toute dépense positive, `--approval-request-id` est obligatoire : la
+requête courante doit être approved, authentifiée et toujours liée aux octets
+exacts du plan/ledger, à la réservation, au montant et à la capacité
+`real_spending`. Une capability publication n'autorise pas une dépense.
+Le montant réalisé doit être <= réservation et <= autorisation. Un plan à
+budget nul ne peut enregistrer de dépense positive.
+
+À dépense nulle, une clôture peut se faire sans approval ou avec une requête
+pending/denied. Cependant, **tout état V6 existant** doit être intègre et lié au
+plan/ledger courant : son absence autorisée ne permet pas d'ignorer un fichier
+présent mais corrompu, incomplet ou périmé. L'option request_id, si fournie même
+à zéro, doit correspondre exactement. V7 ne prétend jamais qu'une publication
+ou création de compte a été effectuée par Scout.
+
+### Écriture comptable et formule du disponible
+
+Le runtime calcule en centimes entiers exacts. Aucune arithmétique monétaire
+flottante, conversion approximative, commission supposée ni ROI indéfini.
+Les limites V5 restent actives : 1000 événements et montants/compteurs bornés
+à 1 000 000 000 centimes. `NaN`, `Infinity`, flottants, négatifs, `-0`, notation
+exponentielle et dépassements sont refusés avant mutation.
+
+Sous le verrou partagé V5/V6, les événements sont construits et validés en
+mémoire dans cet ordre déterministe, en omettant les montants nuls :
+
+1. `expense` : dépense réalisée déclarée par l'humain, consommée sur la réservation.
+2. `release` : reliquat intégral, ajouté au disponible.
+3. `revenue` : revenu réalisé déclaré par l'humain, ajouté au disponible.
+
+Le ledger entier est remplacé **une seule fois**, atomiquement. Il n'existe
+aucun ledger intermédiaire persistant avec une dépense mais sans libération.
+Les entrées antérieures restent identiques et la chaîne V5 est rejouée.
+La réservation de cette expérience doit être intacte avant clôture ; V7 refuse
+une réservation déjà partiellement dépensée/libérée par une autre opération.
+À la clôture il ne reste aucune réservation pour cette expérience.
+
+```text
+released_cents = reserved_cents - expense_cents
+net_result_cents = revenue_cents - expense_cents
+available_after = available_before + released_cents + revenue_cents
+available + reserved = initial_capital + total_revenue - total_expenses
+realized_net_result = total_revenue - total_expenses
+```
+
+La dépense n'est pas déduite à nouveau du disponible : V5 a déjà retiré la
+réservation du disponible. Exemple 100 EUR initial, 10 EUR réservés, dépense
+confirmée 7 EUR, revenu confirmé 25 EUR :
+
+| Champ final | Centimes |
+| --- | ---: |
+| Initial | 10000 |
+| Disponible | 11800 |
+| Réservé | 0 |
+| Dépenses cumulées | 700 |
+| Revenus cumulés | 2500 |
+| Résultat net cumulé | 1800 |
+
+Le schéma V5 des revenus reste inchangé (`experiment: null`). Leur lien à
+l'expérience est explicite dans la description, la référence humaine de résultat
+et la liste des identifiants d'entrées dans le résultat V7 authentifié. V7 revalide
+ces liens et l'ordre de chaque événement ; aucun revenu n'est compté deux fois.
+
+### Résultat, état de clôture et mémoire économique
+
+Fichiers produits dans le workspace :
+
+- `experiment-result.json` : résultat courant version 7, UUID/date runtime,
+  experiment_id exact, outcome humain, montants, net, reliquat, références V6,
+  human_reference runtime, source `human_confirmed`, statut `closed`, score V3,
+  durée prévue, apprentissage attendu, hash du plan et événements V5 associés.
+- `economic-history.json` : résultats antérieurs conservés dans l'ordre,
+  compteurs d'outcomes, coûts/revenus/nets dérivés par le runtime. Aucun texte
+  de mémoire inventé par le modèle. Le nom d'opportunité est conservé ; aucun
+  « type » économique non présent dans V4 n'est inventé.
+- `revenue-report.txt` : état et montants à la clôture, résultat net, disponible
+  après clôture, totaux cumulés et mentions obligatoires :
+  `Les montants réalisés ont été déclarés explicitement par l'utilisateur.`
+  `Scout n'a exécuté aucun paiement ni transaction externe.`
+- `economic-report.txt` : résumé V5 rafraîchi depuis le nouveau ledger.
+
+Le plan `experiment.json` V4 reste inchangé avec `status=planned` : c'est la
+proposition historique approuvée. L'état de cycle de vie **closed** appartient
+au résultat V7 et à son historique. Le réécrire en V4 casserait le fingerprint
+V6 et ferait passer la même expérience pour un nouveau plan.
+
+Une même expérience est clôturable une seule fois. La commande strictement
+identique retourne le résultat initial sans nouvel UUID/date, sans événements
+ni écriture. Changer outcome, montant ou l'option request_id après clôture est
+refusé. Modifier/reformater le plan d'une expérience déjà clôturée est refusé.
+Pour une nouvelle expérience V4 réellement distincte, suivre le cycle normal
+V4 → réservation V5 → nouvelle demande V6 si nécessaire → V7. Les résultats
+précédents sont conservés ; le rapport courant correspond à la dernière clôture.
+
+Une clôture change volontairement le ledger et consomme/libère la réservation :
+l'approbation V6 devient donc **périmée pour toute nouvelle dépense**. V7 ne la
+réécrit pas pour la faire paraître actuelle. Pour une relance idempotente, V7
+vérifie la preuve V6 historique authentifiée et les empreintes avant/après
+clôture, au lieu d'exiger à tort une réservation encore active. Un nouveau
+lancement du mode approval peut normalement signaler cette liaison périmée.
+
+### Intégrité, transaction incomplète et confinement
+
+Un historique autoritatif V7 authentifié par HMAC-SHA256 est conservé dans
+`~/.automaton/.scout-revenue-<hash-du-chemin-workspace>/`, frère du workspace :
+`state.json` et `integrity-key`. Les outils du modèle n'y ont aucun accès ;
+`write_file` refuse aussi résultat, historique et rapport publics. Répertoire
+0700 et fichiers créés en 0600, aucune clé API ou banque. Limite : 100 clôtures,
+1 MiB pour l'historique V7, sans purge automatique.
+
+Les résultats sont vérifiés contre l'historique authentifié, les préfixes de
+ledger rejoués par V5 et l'historique V6. Toute altération d'une ancienne entrée
+V5 reste détectée même si sa chaîne a été recalculée. Des ajouts V5 valides pour
+une nouvelle expérience sont permis ; ils ne peuvent réécrire le préfixe déjà
+lié à une clôture. Si aucune entrée n'a été ajoutée, même une modification des
+octets du ledger après clôture est refusée.
+
+V7 réutilise les protections symlink/hardlink, `O_NOFOLLOW`, temporaires
+exclusifs, relecture, `fsync`, renommage et verrou partagé de V5. Il écrit d'abord
+un journal durable `prepared`, puis le ledger en une opération atomique, les
+vues, et enfin l'état `complete`. Les différents fichiers **ne forment pas une
+transaction atomique collective** : après interruption, l'état prepared bloque
+les relances, même si certaines écritures ont abouti. Aucun revenu/dépense
+n'est rejoué, aucun résultat n'est reconstruit silencieusement depuis un état
+incohérent. Un échec après création de la clé mais avant le journal bloque aussi.
+
+En cas d'interruption/corruption : arrêter les opérations, conserver les fichiers
+et le verrou, vérifier qu'aucun processus n'écrit, puis faire une inspection
+humaine. Ne pas supprimer l'ancrage, éditer le résultat ou relancer aveuglément.
+Une sauvegarde de récupération doit inclure **ensemble** le workspace et les
+répertoires privés V6/V7, avec leurs permissions, restaurés au même chemin absolu.
+Ne jamais restaurer le seul ledger ou déplacer une clé pour contourner un refus.
+Aucun reset, suppression de ledger ou réparation automatique n'est fourni.
+Utiliser `--preview` pour éviter de polluer l'état réel lors du premier test.
+
+Comme V6, V7 fait confiance au compte système et au CLI hôte. Il ne peut pas
+prouver physiquement qui a tapé la commande ni résister à un administrateur
+contrôlant le code, toutes les clés et les sauvegardes. Ce n'est pas une preuve
+bancaire. Ne jamais exposer ces fonctions de clôture comme outil du modèle.
+
+### Vérification logicielle
+
+```sh
+git diff --check
+pnpm build
+pnpm exec vitest run src/__tests__/scout-revenue.test.ts
+pnpm exec vitest run src/__tests__/scout-*.test.ts
+```
+
+Les tests V7 couvrent montants/budgets/approbations, zéro/reliquat, exactitude des
+soldes, idempotence, deux expériences successives, mémoire dérivée, corruption,
+liens dangereux, interruptions d'écriture, concurrence, preview et CLI réel sans
+Ollama. Aucune validation matérielle V7 n'est revendiquée avant le test Chromebook.

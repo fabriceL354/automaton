@@ -86,8 +86,11 @@ export function createLocalWorkspaceTools(root = scoutWorkspaceRoot()): Automato
         if (path.resolve(root, args.path) === path.join(root, "MISSION.txt")) return "ERROR: MISSION.txt is read-only";
         // Economic state belongs exclusively to the ledger runtime, including
         // its report, lock and temporary files. No model-accessible write path.
-        if (/^\.?economic-(?:ledger|report)/i.test(path.basename(path.resolve(root, args.path)))) {
+        if (/^\.?economic-(?:ledger|report|history)/i.test(path.basename(path.resolve(root, args.path)))) {
           return "ERROR: economic files are runtime-controlled";
+        }
+        if (/^\.?(?:experiment-result|revenue)(?:[.-]|$)/i.test(path.basename(path.resolve(root, args.path)))) {
+          return "ERROR: revenue files are runtime-controlled";
         }
         if (/^\.?approval(?:[.-]|$)/i.test(path.basename(path.resolve(root, args.path)))) {
           return "ERROR: approval files are runtime-controlled";

@@ -257,3 +257,11 @@ export function buildEconomicReport(ledger: EconomicLedger, plan?: ExperimentPla
     "Aucune dépense ni action externe n'a été exécutée par Scout.");
   return lines.join("\n") + "\n";
 }
+
+/** Read-only historical prefix for V7 audit; replay the unchanged V5 invariants. */
+export function ledgerPrefix(ledger: EconomicLedger, count: number): EconomicLedger {
+  const current = parseEconomicLedger(JSON.stringify(ledger));
+  integer(count, 1, current.entries.length, "ledger prefix count");
+  const entries = current.entries.slice(0, count);
+  return parseEconomicLedger(JSON.stringify({ version: 5, currency: "EUR", ...replay(entries), entries }));
+}
