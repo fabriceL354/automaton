@@ -12,7 +12,7 @@ const MAX_FILE_BYTES = 128 * 1024;
 
 // Reject symlinks in every component, including the workspace itself. Files
 // with multiple hard links are rejected too. Scout has no link-creation tool.
-async function safePath(root: string, input: string, createParents = false): Promise<string> {
+export async function safePath(root: string, input: string, createParents = false): Promise<string> {
   if (!input.trim() || path.isAbsolute(input) || input.includes("\0")) {
     throw new Error("relative workspace path required");
   }
@@ -84,6 +84,11 @@ export function createLocalWorkspaceTools(root = scoutWorkspaceRoot()): Automato
         if (Buffer.byteLength(args.content) > MAX_FILE_BYTES) return "ERROR: content exceeds 128 KiB";
         // Mission is supplied by the operator and must survive agent mistakes.
         if (path.resolve(root, args.path) === path.join(root, "MISSION.txt")) return "ERROR: MISSION.txt is read-only";
+        // Economic state belongs exclusively to the ledger runtime, including
+        // its report, lock and temporary files. No model-accessible write path.
+        if (/^\.?economic-(?:ledger|report)/i.test(path.basename(path.resolve(root, args.path)))) {
+          return "ERROR: economic files are runtime-controlled";
+        }
         try {
           const target = await safePath(root, args.path, true);
           const file = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);

@@ -1,4 +1,4 @@
-# Scout V4 Experiment Runner (local-only)
+# Scout V5 Economic Ledger (local-only)
 
 Scout utilise Ollama local pour l’inférence et un workspace confiné pour ses
 fichiers. V2 ajoute uniquement des lectures Web publiques HTTPS. Aucun Conway,
@@ -510,3 +510,171 @@ matériellement. Tests simulés :
 pnpm exec vitest run src/__tests__/scout-experiment.test.ts
 pnpm exec vitest run src/__tests__/scout-*.test.ts
 ```
+
+## V5 — Mémoire économique locale, déterministe et auditable
+
+`SCOUT_MODE=ledger` est un mode séparé qui ne fait **aucun appel Ollama ni Web**.
+Il n'a besoin ni d'un modèle installé, ni de `MISSION.txt`. Les modes `local`,
+`opportunity` et `experiment` conservent leur parcours. Le ledger n'est pas un
+compte bancaire : son capital et ses mouvements sont uniquement comptables.
+Aucun achat, paiement, wallet, compte, message ou publication n'est effectué.
+
+```sh
+SCOUT_MODE=ledger SCOUT_INITIAL_CAPITAL_EUR=100 node dist/index.js --run
+```
+
+Le runtime produit deux fichiers fixes dans `~/.automaton/scout-workspace` :
+`economic-ledger.json` et `economic-report.txt`. L'outil générique `write_file`
+refuse les noms économiques, y compris le verrou et les fichiers temporaires.
+Le modèle ne reçoit aucune API comptable et ne peut pas modifier les soldes.
+
+### Capital et monnaie exacte
+
+`SCOUT_INITIAL_CAPITAL_EUR` vaut `100` par défaut. Il accepte une valeur de
+`0` à `10000` EUR, avec au plus deux décimales séparées par un point : `100`,
+`0.10`, `25.99`. Les signes, espaces, exposants, virgules et arrondis implicites
+sont refusés. Les chiffres sont convertis directement en centimes via `BigInt`.
+Toutes les opérations monétaires utilisent des entiers exacts ; les fichiers
+JSON stockent des nombres entiers sûrs, jamais des montants décimaux en euros.
+
+Cette variable sert **uniquement si le ledger n'existe pas**. Dès qu'il existe,
+le capital vient de l'entrée d'initialisation vérifiée. Changer la variable,
+même avec une nouvelle valeur invalide, ne réinitialise pas le ledger. Un fichier
+présent mais vide ou corrompu est une erreur, jamais un ledger inexistant.
+
+### Format et invariants
+
+La racine contient exactement `version: 5`, `currency: "EUR"`, `entries` et :
+
+- `initial_capital_cents` ;
+- `available_balance_cents` ;
+- `reserved_balance_cents` ;
+- `total_recorded_expenses_cents` ;
+- `total_recorded_revenue_cents` ;
+- `realized_net_result_cents` (seul total pouvant être négatif).
+
+Chaque entrée contient exactement `id`, `type`, `amount_cents`, `timestamp`,
+`description`, `experiment`, `human_reference`, `previous_hash` et `hash`.
+Les IDs séquentiels et les timestamps UTC sont produits par le runtime.
+La description est bornée à 240 caractères ; la référence humaine à 120.
+`experiment` vaut `null` ou contient l'identifiant SHA-256 du plan V4 canonique,
+son nom, son budget en centimes et les deux indicateurs de dépense/approbation.
+Tous les champs supplémentaires, types inconnus, booléens coercibles, fractions,
+montants négatifs ou hors plage sont refusés.
+
+Les types d'entrée sont :
+
+| Type | Effet comptable |
+| --- | --- |
+| `initialization` | Une seule première entrée ; définit le capital local |
+| `reserve` | Déplace du disponible vers le réservé pour un plan précis |
+| `release` | Restitue au disponible une partie non consommée de la réservation |
+| `expense` | Consomme une réservation existante ; augmente les dépenses enregistrées |
+| `revenue` | Augmente le disponible et les revenus explicitement confirmés |
+
+Chaque lecture rejoue l'historique entier. À chaque étape, les montants restent
+bornés ; aucune réservation ne dépasse le disponible ; une dépense/libération
+ne dépasse pas le reste de la réservation associée. Les totaux stockés doivent
+être exactement égaux au recalcul. Les relations sont :
+
+```text
+disponible + réservé = capital initial + revenus enregistrés - dépenses enregistrées
+résultat net réalisé enregistré = revenus enregistrés - dépenses enregistrées
+```
+
+V5 limite l'historique à 1000 entrées et le fichier à 2 MiB. Les soldes et
+compteurs cumulés sont plafonnés à 1 000 000 000 centimes (10 millions EUR) ;
+le capital initial reste plafonné à 10 000 EUR. Dépasser une limite provoque une
+erreur explicite : aucune troncature ni suppression d'historique.
+
+Chaque entrée inclut le hash de la précédente et son propre SHA-256. Cette
+chaîne détecte une altération sans recalcul cohérent ; elle n'est ni une
+blockchain ni une signature. Un utilisateur ayant accès en écriture aux fichiers
+et capable de recalculer toute la chaîne peut les falsifier. Elle ne prouve pas
+qu'un paiement ou revenu externe a eu lieu ; les sauvegardes restent nécessaires.
+
+### Intégration V4 et approbation
+
+Si `experiment.json` existe, le runtime revalide le schéma V4/V4.1 exact, le statut
+`planned`, les types, la durée 1–7 jours, les actions bornées, les critères,
+le budget 0–10 EUR et les indicateurs sensibles. Un plan exigeant dépense,
+compte ou publication avec `requires_human_approval: false` est refusé.
+Un fichier invalide arrête l'exécution sans nouvelle écriture du ledger.
+L'absence de fichier permet simplement l'initialisation/lecture comptable.
+
+Un plan signalant une dépense avec un budget positif donne au maximum une
+**réservation comptable locale**, bornée par le disponible. La lecture du plan
+ne constitue ni une approbation ni une dépense. Le même contenu canonique de
+plan donne le même identifiant : relancer ne réserve jamais deux fois, même
+après consommation ou libération. Changer le contenu produit un nouvel
+identifiant et peut créer une nouvelle réservation : vérifier le disponible
+et les réservations avant de remplacer un plan. Un plan à budget nul ne crée
+aucun mouvement. Aucun texte libre du plan n'est exécuté ou interprété comme
+un montant, revenu confirmé ou autorisation.
+
+Les références vers V4 restent des propositions : V5 ne vérifie pas les revenus
+futurs, ne consulte pas de banque et n'authentifie pas l'origine des plans.
+Le rapport affiche capital, disponible, réservé, dépenses/revenus enregistrés,
+résultat net, nombre d'entrées, plans associés et approbation requise. Il rappelle
+qu'aucune dépense ni action externe n'a été exécutée par Scout.
+
+### API interne de futurs événements autorisés
+
+`recordAuthorizedEvent` (calcul pur) et `recordLedgerEvent` (persistance atomique)
+sont réservées au code hôte de confiance. Elles ne sont exposées ni comme outils
+du modèle, ni comme paramètres d'actions, ni via un fichier de commandes,
+ni via des variables d'environnement ou une commande CLI de dépense.
+
+Pour enregistrer une dépense, un revenu confirmé ou une libération, l'appelant
+doit fournir un montant entier positif en centimes, une description et
+`authorization: { source: "human", reference: "..." }`. Dépenses et libérations
+exigent aussi l'identifiant d'une réservation existante. Une référence humaine
+déjà enregistrée est refusée, empêchant de répéter un événement confirmé.
+Le code hôte doit obtenir cette autorisation/confirmation auprès de l'humain ;
+ce champ n'est pas un mécanisme d'authentification ni le futur Approval Gate V6.
+Il est interdit de construire cet appel directement depuis une affirmation LLM.
+
+### Écriture atomique, concurrence et récupération
+
+Le runtime prend un verrou exclusif `.economic-ledger.lock` avant lecture et le
+garde jusqu'à la vérification finale. Une deuxième exécution échoue proprement.
+Chaque écriture utilise un temporaire exclusif dans le même workspace, une
+validation, une relecture, `fsync`, un renommage atomique et la synchronisation
+du répertoire. Les liens symboliques et fichiers à liens physiques multiples
+sont refusés. Les chemins sont choisis uniquement par le runtime.
+
+Le ledger est la référence. Ledger et rapport sont atomiques individuellement,
+pas comme une paire : si le ledger est enregistré mais le rapport échoue, le
+prochain lancement régénère le rapport sans doubler la réservation. Après un
+arrêt brutal, le ledger reste ancien ou nouveau mais complet ; un verrou et
+un temporaire peuvent rester. Le runtime ne les efface pas automatiquement.
+
+En cas de ledger invalide ou verrou bloqué :
+
+1. Arrêter les relances et vérifier qu'aucun processus Scout n'écrit encore.
+2. Sauvegarder les fichiers existants, y compris ledger, rapport, verrou et
+   éventuels temporaires, sans modifier les originaux.
+3. Inspecter l'erreur et comparer avec une sauvegarde connue valide. Ne pas
+   éditer les soldes pour les faire correspondre et ne pas supprimer le ledger
+   pour repartir silencieusement à zéro.
+4. Une restauration de sauvegarde ou un traitement du verrou orphelin doit être
+   une décision humaine explicite, après conservation des pièces d'audit. Retirer
+   uniquement un verrou confirmé orphelin ; ne jamais voler celui d'un processus
+   actif. Un temporaire n'est jamais promu automatiquement en ledger.
+5. Relancer le mode ledger : il revalide l'historique avant tout mouvement.
+   Si aucun historique fiable n'est disponible, conserver l'erreur visible et
+   demander une analyse humaine ; aucune réparation automatique n'est prévue.
+
+### Tests V5
+
+```sh
+git diff --check
+pnpm build
+pnpm exec vitest run src/__tests__/scout-ledger.test.ts
+pnpm exec vitest run src/__tests__/scout-*.test.ts
+```
+
+Les tests utilisent uniquement des fichiers temporaires et des événements
+simulés, sans Internet ni Ollama. Ils couvrent également les échecs de renommage,
+la concurrence, les liens dangereux et le CLI réel. La validation matérielle
+sur Chromebook reste à effectuer séparément après intégration.

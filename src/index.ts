@@ -3,9 +3,10 @@
 import { loadLocalScoutConfig, runLocalScout } from "./agent/local-runner.js";
 import { runOpportunityScout, scoutMode } from "./agent/opportunity-scout.js";
 import { runExperimentScout } from "./agent/experiment-runner.js";
+import { runLedgerScout } from "./agent/ledger-runner.js";
 
-const VERSION = "0.4.0";
-const HELP = `Scout V4 Experiment Runner (local-only) v${VERSION}
+const VERSION = "0.5.0";
+const HELP = `Scout V5 Economic Ledger (local-only) v${VERSION}
 
 Usage:
   automaton --run          Run Scout from ~/.automaton/scout-workspace/MISSION.txt
@@ -13,6 +14,7 @@ Usage:
   automaton --help         Show this help
 
 Scout writes rapport.txt inside ~/.automaton/scout-workspace and exits.
+Ledger mode writes economic-ledger.json and economic-report.txt; no model required.
 Install the model with: ollama pull qwen2.5:1.5b-instruct
 
 Environment:
@@ -23,7 +25,8 @@ Environment:
                           V3.1 caps candidate/detail calls at 128/256
   SCOUT_TIMEOUT_MS        Local inference timeout: 1000–1800000 ms (default: 300000)
   SCOUT_DEBUG_ACTIONS     1 prints rejected raw actions locally (default: 0)
-  SCOUT_MODE               local (default), opportunity or experiment; no implicit fallback
+  SCOUT_MODE               local (default), opportunity, experiment or ledger; no implicit fallback
+  SCOUT_INITIAL_CAPITAL_EUR  Ledger initialization only: 0–10000 EUR, max 2 decimals (default: 100)
   SCOUT_BUDGET_EUR         Positive integer budget for opportunity mode (default: 100, max: 10000)
   SCOUT_EXPERIMENT_BUDGET_EUR  Planning ceiling for experiment mode (default: 10, max: 10, never spent)
   SCOUT_COUNTRY            Optional operator-supplied country/context (no geolocation)
@@ -48,11 +51,15 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "-v":
-      console.log(`Scout V4 Experiment Runner (local-only) v${VERSION}`);
+      console.log(`Scout V5 Economic Ledger (local-only) v${VERSION}`);
       return;
     case "--run": {
-      const config = await loadLocalScoutConfig();
       const mode = scoutMode();
+      if (mode === "ledger") {
+        await runLedgerScout({ onEvent: message => console.log(message) });
+        return;
+      }
+      const config = await loadLocalScoutConfig();
       console.log(`Scout ${mode}: ${config.model} via ${config.baseUrl}`);
       if (mode === "opportunity") {
         await runOpportunityScout({ ...config, onEvent: message => console.log(message) });
