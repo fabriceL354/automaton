@@ -1,4 +1,4 @@
-# Scout V3.1 Opportunity Scout (local-only)
+# Scout V4 Experiment Runner (local-only)
 
 Scout utilise Ollama local pour l’inférence et un workspace confiné pour ses
 fichiers. V2 ajoute uniquement des lectures Web publiques HTTPS. Aucun Conway,
@@ -427,3 +427,47 @@ classement et maximum trois entrées. `rapport.txt` est ensuite généré sépar
 par le runtime, avec budget, top 3, risques, hypothèses, première expérience
 plafonnée à 10 €, recommandation et `Sources` vérifiées. Aucun achat, paiement,
 compte, publication ou dépense n’est effectué.
+
+## V4 — Experiment Runner (planification uniquement)
+
+Le mode V4 est opt-in : `SCOUT_MODE=experiment`. Il ne fait aucune nouvelle
+recherche Web et ne donne aucun outil supplémentaire au modèle. Il lit
+exclusivement le fichier `opportunities.json` produit et validé par V3, recalcule
+les scores et sélectionne automatiquement l'opportunité au meilleur score (avec
+un départage déterministe). Le modèle ne peut pas choisir un autre nom ou un
+chemin de fichier.
+
+```sh
+SCOUT_MODE=experiment \
+SCOUT_EXPERIMENT_BUDGET_EUR=10 \
+node dist/index.js --run
+```
+
+`SCOUT_EXPERIMENT_BUDGET_EUR` est un entier de `0` à `10`, et ne peut jamais
+dépasser `SCOUT_BUDGET_EUR` enregistré dans `opportunities.json`. C'est un
+plafond de planification, jamais une autorisation de dépense. V4 préfère un plan
+à `0 €` lorsque les critères indiquent qu'aucune dépense réelle n'est nécessaire.
+
+Le runner utilise trois petits appels Ollama séquentiels : hypothèse, actions,
+puis critères de mesure/arrêt. Chaque JSON est validé immédiatement, avec au
+plus deux tentatives par étape et six appels au total. Les actions sont bornées
+à cinq, la durée à 1–7 jours, les métriques et conditions sont non vides, et les
+booléens sont stricts. Une sortie invalide n'est jamais acceptée silencieusement.
+Le runtime calcule `requires_human_approval` si le plan mentionne une dépense,
+un compte, une publication ou une action sensible ; cela ne déclenche aucune
+action.
+
+Le mode écrit uniquement deux fichiers fixes dans le workspace :
+
+- `experiment.json` : version 4, statut `planned`, opportunité et score V3,
+  hypothèse, budget/durée, actions, métriques, conditions, apprentissage attendu
+  et indicateurs d'approbation ;
+- `experiment-report.txt` : résumé court dans la langue explicitement demandée
+  par `MISSION.txt`, avec la mention exacte `Aucune dépense ni action externe
+  n'a été exécutée par Scout.`
+
+V4 ne possède aucun outil d'achat, wallet, paiement, compte, authentification,
+publication, email, formulaire, shell ou réseau externe. Le seul POST reste
+l'inférence vers Ollama sur loopback. Les tests V4 simulent Ollama et vérifient
+les artefacts, la sélection, les budgets, les retries bornés, les booléens et
+l'absence d'exécution externe.

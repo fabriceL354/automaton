@@ -2,9 +2,10 @@
 /** Entry point for the local-only Scout branch. */
 import { loadLocalScoutConfig, runLocalScout } from "./agent/local-runner.js";
 import { runOpportunityScout, scoutMode } from "./agent/opportunity-scout.js";
+import { runExperimentScout } from "./agent/experiment-runner.js";
 
-const VERSION = "0.3.1";
-const HELP = `Scout V3.1 Opportunity Scout v${VERSION}
+const VERSION = "0.4.0";
+const HELP = `Scout V4 Experiment Runner (local-only) v${VERSION}
 
 Usage:
   automaton --run          Run Scout from ~/.automaton/scout-workspace/MISSION.txt
@@ -22,8 +23,9 @@ Environment:
                           V3.1 caps candidate/detail calls at 128/256
   SCOUT_TIMEOUT_MS        Local inference timeout: 1000–1800000 ms (default: 300000)
   SCOUT_DEBUG_ACTIONS     1 prints rejected raw actions locally (default: 0)
-  SCOUT_MODE               local (default) or opportunity; no implicit fallback
+  SCOUT_MODE               local (default), opportunity or experiment; no implicit fallback
   SCOUT_BUDGET_EUR         Positive integer budget for opportunity mode (default: 100, max: 10000)
+  SCOUT_EXPERIMENT_BUDGET_EUR  Planning ceiling for experiment mode (default: 10, max: 10, never spent)
   SCOUT_COUNTRY            Optional operator-supplied country/context (no geolocation)
   SCOUT_CONTEXT            Optional bounded operator context (no automatic lookup)
   SCOUT_SEARCH_PROVIDER   none (default), searxng, duckduckgo-lite or duckduckgo-html; no automatic fallback
@@ -46,7 +48,7 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "-v":
-      console.log(`Scout V3.1 Opportunity Scout v${VERSION}`);
+      console.log(`Scout V4 Experiment Runner (local-only) v${VERSION}`);
       return;
     case "--run": {
       const config = await loadLocalScoutConfig();
@@ -54,6 +56,8 @@ async function main(): Promise<void> {
       console.log(`Scout ${mode}: ${config.model} via ${config.baseUrl}`);
       if (mode === "opportunity") {
         await runOpportunityScout({ ...config, onEvent: message => console.log(message) });
+      } else if (mode === "experiment") {
+        await runExperimentScout({ ...config, onEvent: message => console.log(message) });
       } else {
         await runLocalScout({ ...config, onEvent: message => console.log(message) });
       }

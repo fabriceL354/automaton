@@ -508,8 +508,8 @@ export async function runOpportunityScout(options: {
 }
 
 /** Explicit mode parsing used by the CLI; no implicit mode or fallback. */
-export function scoutMode(env: Record<string, string | undefined> = process.env): "local" | "opportunity" {
+export function scoutMode(env: Record<string, string | undefined> = process.env): "local" | "opportunity" | "experiment" {
   const value = env.SCOUT_MODE ?? "local";
-  if (value !== "local" && value !== "opportunity") throw new Error("SCOUT_MODE must be local or opportunity");
+  if (value !== "local" && value !== "opportunity" && value !== "experiment") throw new Error("SCOUT_MODE must be local, opportunity or experiment");
   return value;
 }
