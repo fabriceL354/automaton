@@ -408,21 +408,21 @@ export async function runOpportunityScout(options: {
     options.onEvent?.(`web_search: ${result.startsWith("ERROR:") ? result : "completed"}`);
     if (result.startsWith("ERROR:")) throw new Error("Opportunity Scout search failed; no report written");
   }
-  const candidates: Array<{ kind: "result" | "url"; index: number; url: string }> = [];
+  const sourceCandidates: Array<{ kind: "result" | "url"; index: number; url: string }> = [];
   const seen = new Set<string>();
   // resultSnapshot intentionally exposes no mutable index; derive the index from
   // its stable order and keep URLs only as a duplicate guard.
   const resultSnapshot = web.resultSnapshot();
   resultSnapshot.forEach((result, index) => {
-    if (!seen.has(result.url)) { seen.add(result.url); candidates.push({ kind: "result", index, url: result.url }); }
+    if (!seen.has(result.url)) { seen.add(result.url); sourceCandidates.push({ kind: "result", index, url: result.url }); }
   });
   web.inputs.urls.forEach((url, index) => {
-    if (!seen.has(url)) { seen.add(url); candidates.push({ kind: "url", index, url }); }
+    if (!seen.has(url)) { seen.add(url); sourceCandidates.push({ kind: "url", index, url }); }
   });
   const sources: Array<{ url: string; text: string }> = [];
-  for (const candidate of candidates.slice(0, WEB_LIMITS.pages)) {
-    const tool = candidate.kind === "result" ? "read_search_result" : "read_public_url";
-    const value = await web.readIndex(tool, candidate.index);
+  for (const sourceCandidate of sourceCandidates.slice(0, WEB_LIMITS.pages)) {
+    const tool = sourceCandidate.kind === "result" ? "read_search_result" : "read_public_url";
+    const value = await web.readIndex(tool, sourceCandidate.index);
     options.onEvent?.(`${tool}: ${value.startsWith("ERROR:") ? value : "completed"}`);
     const source = value.startsWith("ERROR:") ? undefined : parseReadSource(value);
     if (source) sources.push(source);
@@ -439,14 +439,14 @@ export async function runOpportunityScout(options: {
     return operation();
   };
 
-  let candidates: OpportunityCandidate[] | undefined;
+  let opportunityCandidates: OpportunityCandidate[] | undefined;
   let candidateReason = "invalid candidate list";
   for (let attempt = 0; attempt < OPPORTUNITY_LIMITS.maxAnalysisAttempts && inferenceCalls < maxTurns; attempt++) {
     let raw = "";
     try {
       raw = await call(() => askCandidateList(baseUrl, model, mission, settings, language, sources, inference));
-      candidates = parseOpportunityCandidates(raw);
-      options.onEvent?.(`opportunity_candidates: ${candidates.length} candidate(s)`);
+      opportunityCandidates = parseOpportunityCandidates(raw);
+      options.onEvent?.(`opportunity_candidates: ${opportunityCandidates.length} candidate(s)`);
       break;
     } catch (error) {
       candidateReason = error instanceof Error ? error.message : "invalid candidate list";
@@ -454,32 +454,32 @@ export async function runOpportunityScout(options: {
       options.onEvent?.(`ERROR: candidate list rejected before analysis (${candidateReason})`);
     }
   }
-  if (!candidates) throw new Error(`Scout could not obtain a valid candidate list: ${candidateReason}`);
+  if (!opportunityCandidates) throw new Error(`Scout could not obtain a valid candidate list: ${candidateReason}`);
 
   const valid: OpportunityDraft[] = [];
-  for (const candidate of candidates.slice(0, OPPORTUNITY_LIMITS.maxOpportunities)) {
+  for (const opportunityCandidate of opportunityCandidates.slice(0, OPPORTUNITY_LIMITS.maxOpportunities)) {
     let accepted = false;
     let detailReason = "invalid opportunity detail";
     for (let attempt = 0; attempt < OPPORTUNITY_LIMITS.maxCandidateAttempts && inferenceCalls < maxTurns; attempt++) {
       let raw = "";
       try {
-        raw = await call(() => askCandidateDetail(baseUrl, model, mission, settings, language, candidate, sources, inference));
-        const detail = parseOpportunityDetail(raw, candidate, settings.budgetEur, sources.length);
+        raw = await call(() => askCandidateDetail(baseUrl, model, mission, settings, language, opportunityCandidate, sources, inference));
+        const detail = parseOpportunityDetail(raw, opportunityCandidate, settings.budgetEur, sources.length);
         valid.push(detail);
         accepted = true;
-        options.onEvent?.(`opportunity: ${candidate.name} validated`);
+        options.onEvent?.(`opportunity: ${opportunityCandidate.name} validated`);
         break;
       } catch (error) {
         detailReason = error instanceof Error ? error.message : "invalid opportunity detail";
         if (debug === "1" && raw) console.error(raw);
-        options.onEvent?.(`ERROR: opportunity ${candidate.name} rejected (${detailReason})`);
+        options.onEvent?.(`ERROR: opportunity ${opportunityCandidate.name} rejected (${detailReason})`);
         // A slow candidate must not consume the rest of the run or invalidate
         // candidates already validated. Move on immediately after a timeout.
         if (isTimeoutError(error)) break;
       }
     }
     if (!accepted && inferenceCalls >= maxTurns) {
-      options.onEvent?.(`ERROR: model-call budget exhausted after candidate ${candidate.name}`);
+      options.onEvent?.(`ERROR: model-call budget exhausted after candidate ${opportunityCandidate.name}`);
       break;
     }
   }
