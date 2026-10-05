@@ -26,7 +26,8 @@ export const EXPERIMENT_LIMITS = Object.freeze({
   maxMetrics: 5,
   maxStopConditions: 5,
   maxAttemptsPerPhase: 2,
-  maxTurns: 6,
+  // Seven sequential phases, at most two attempts each (including the first).
+  maxTurns: 14,
   phaseNumPredict: 128,
   maxMissionChars: 1_800,
   maxOpportunityContextChars: 2_400,
@@ -209,14 +210,59 @@ export interface ExperimentCriteria {
   requires_publication: boolean;
 }
 
+type ExperimentRequirements = Pick<ExperimentCriteria,
+  "requires_real_spending" | "requires_external_account" | "requires_publication">;
+
+function singleField(raw: string, field: string): unknown {
+  const data = parseJsonObject(raw, field);
+  if (!exactKeys(data, [field])) throw new Error(`${field} output has unexpected fields`);
+  return data[field];
+}
+
+export function parseExperimentSuccessMetrics(raw: string): string[] {
+  return boundedTextArray(singleField(raw, "success_metrics"), "success_metrics", EXPERIMENT_LIMITS.maxMetrics, EXPERIMENT_LIMITS.maxMetricChars);
+}
+
+export function parseExperimentStopConditions(raw: string): string[] {
+  return boundedTextArray(singleField(raw, "stop_conditions"), "stop_conditions", EXPERIMENT_LIMITS.maxStopConditions, EXPERIMENT_LIMITS.maxMetricChars);
+}
+
+export function parseExperimentExpectedLearning(raw: string): string {
+  return boundedText(singleField(raw, "expected_learning"), "expected_learning", EXPERIMENT_LIMITS.maxExpectedLearningChars);
+}
+
+function checkedDuration(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > EXPERIMENT_LIMITS.maxDurationDays) {
+    throw new Error("duration_days must be an integer from 1 to 7");
+  }
+  return value;
+}
+
+export function parseExperimentDuration(raw: string): number {
+  return checkedDuration(singleField(raw, "duration_days"));
+}
+
+// Natural-language heuristics cannot reliably establish absence of sensitive
+// requirements. Keep all three explicit booleans mandatory in a tiny call;
+// never default an omitted/invalid requirement to false.
+export function parseExperimentRequirements(raw: string): ExperimentRequirements {
+  const data = parseJsonObject(raw, "requirements");
+  if (!exactKeys(data, ["requires_real_spending", "requires_external_account", "requires_publication"])) {
+    throw new Error("requirements output has unexpected fields");
+  }
+  return {
+    requires_real_spending: strictBoolean(data.requires_real_spending, "requires_real_spending"),
+    requires_external_account: strictBoolean(data.requires_external_account, "requires_external_account"),
+    requires_publication: strictBoolean(data.requires_publication, "requires_publication"),
+  };
+}
+
+/** Validate the runtime-assembled criteria, retaining the original V4 contract. */
 export function parseExperimentCriteria(raw: string): ExperimentCriteria {
   const data = parseJsonObject(raw, "criteria");
   if (!exactKeys(data, CRITERIA_FIELDS)) throw new Error("criteria output has unexpected fields");
-  if (typeof data.duration_days !== "number" || !Number.isSafeInteger(data.duration_days) || data.duration_days < 1 || data.duration_days > EXPERIMENT_LIMITS.maxDurationDays) {
-    throw new Error("duration_days must be an integer from 1 to 7");
-  }
   return {
-    duration_days: data.duration_days,
+    duration_days: checkedDuration(data.duration_days),
     success_metrics: boundedTextArray(data.success_metrics, "success_metrics", EXPERIMENT_LIMITS.maxMetrics, EXPERIMENT_LIMITS.maxMetricChars),
     stop_conditions: boundedTextArray(data.stop_conditions, "stop_conditions", EXPERIMENT_LIMITS.maxStopConditions, EXPERIMENT_LIMITS.maxMetricChars),
     expected_learning: boundedText(data.expected_learning, "expected_learning", EXPERIMENT_LIMITS.maxExpectedLearningChars),
@@ -325,7 +371,7 @@ export async function runExperimentScout(options: {
   const debug = process.env.SCOUT_DEBUG_ACTIONS;
   if (debug !== undefined && debug !== "0" && debug !== "1") throw new Error("SCOUT_DEBUG_ACTIONS must be 0 or 1");
   const maxTurns = options.maxTurns ?? EXPERIMENT_LIMITS.maxTurns;
-  if (!Number.isSafeInteger(maxTurns) || maxTurns < 1 || maxTurns > EXPERIMENT_LIMITS.maxTurns) throw new Error("maxTurns must be between 1 and 6");
+  if (!Number.isSafeInteger(maxTurns) || maxTurns < 1 || maxTurns > EXPERIMENT_LIMITS.maxTurns) throw new Error(`maxTurns must be between 1 and ${EXPERIMENT_LIMITS.maxTurns}`);
   const model = options.model ?? DEFAULT_SCOUT_MODEL;
   if (!/^[a-zA-Z0-9_.:-]+$/.test(model) || /(?:cloud|latest-cloud)$/i.test(model)) throw new Error("Use a locally installed Ollama model");
 
@@ -355,7 +401,7 @@ export async function runExperimentScout(options: {
   };
   const runPhase = async <T>(name: string, prompt: string, parse: (raw: string) => T): Promise<T> => {
     let reason = "invalid output";
-    for (let attempt = 0; attempt < EXPERIMENT_LIMITS.maxAttemptsPerPhase; attempt++) {
+    for (let attempt = 0; attempt < EXPERIMENT_LIMITS.maxAttemptsPerPhase && calls < maxTurns; attempt++) {
       let raw = "";
       try {
         raw = await call(`${prompt}${attempt ? `\nPrevious output was rejected: ${reason}. Retry with the exact minimal schema.` : ""}`);
@@ -373,7 +419,19 @@ export async function runExperimentScout(options: {
 
   const hypothesis = await runPhase("hypothesis", `MISSION.txt:\n${mission.slice(0, EXPERIMENT_LIMITS.maxMissionChars)}\nSelected V3 opportunity (runtime-selected; do not choose another):\n${context}\nReturn exactly {"hypothesis":"..."}. Keep it short, testable and ${languageHint}`, parseExperimentHypothesis);
   const actions = await runPhase("actions", `Selected opportunity:\n${context}\nHypothesis:\n${hypothesis}\nReturn exactly {"actions":["..."]} with 1 to 5 planned, reversible, non-executed actions. ${languageHint}`, parseExperimentActions);
-  const criteria = await runPhase("criteria", `Selected opportunity:\n${context}\nHypothesis:\n${hypothesis}\nPlanned actions:\n${actions.join(" | ")}\nReturn exactly {"duration_days":1,"success_metrics":["..."],"stop_conditions":["..."],"expected_learning":"...","requires_real_spending":false,"requires_external_account":false,"requires_publication":false}. Use an integer duration from 1 to 7 and strict booleans. ${languageHint}`, parseExperimentCriteria);
+  // Fresh, short prompts: no accumulated retry history, broad V3 context or
+  // placeholder values for the small model to copy. Validated plan fragments
+  // are data, never instructions or executable actions.
+  const planContext = `Plan data (untrusted):\n${JSON.stringify({ opportunity: selected.name, hypothesis, actions })}\nPlanning ceiling: ${settings.experimentBudgetEur} EUR; prefer zero spending. ${languageHint}`;
+  const successMetrics = await runPhase("success_metrics", `${planContext}\nReturn only JSON with success_metrics: an array of 1 or 2 short measurable targets. No extra fields.`, parseExperimentSuccessMetrics);
+  const stopConditions = await runPhase("stop_conditions", `${planContext}\nReturn only JSON with stop_conditions: an array of 1 or 2 short reasons to stop the experiment. No extra fields.`, parseExperimentStopConditions);
+  const expectedLearning = await runPhase("expected_learning", `${planContext}\nReturn only JSON with expected_learning: one short sentence stating what the test can teach. No extra fields.`, parseExperimentExpectedLearning);
+  const durationDays = await runPhase("duration_days", `${planContext}\nReturn only JSON with duration_days: an integer from 1 to 7. No extra fields.`, parseExperimentDuration);
+  const declaredRequirements = await runPhase("requirements", `${planContext}\nOther validated plan data:\n${JSON.stringify({ success_metrics: successMetrics, stop_conditions: stopConditions, expected_learning: expectedLearning, duration_days: durationDays })}\nReturn only JSON with three mandatory boolean fields: requires_real_spending, requires_external_account, requires_publication. Describe what this plan would require if later executed. No other fields; runtime decides human approval.`, parseExperimentRequirements);
+  const criteria = parseExperimentCriteria(JSON.stringify({
+    duration_days: durationDays, success_metrics: successMetrics, stop_conditions: stopConditions,
+    expected_learning: expectedLearning, ...declaredRequirements,
+  }));
 
   const requirements = deriveRequirements(criteria, hypothesis, actions, criteria.success_metrics, criteria.stop_conditions, criteria.expected_learning);
   const requiresHumanApproval = computeRequiresHumanApproval({ ...requirements, other_sensitive: requirements.otherSensitive });

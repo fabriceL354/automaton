@@ -448,9 +448,11 @@ dépasser `SCOUT_BUDGET_EUR` enregistré dans `opportunities.json`. C'est un
 plafond de planification, jamais une autorisation de dépense. V4 préfère un plan
 à `0 €` lorsque les critères indiquent qu'aucune dépense réelle n'est nécessaire.
 
-Le runner utilise trois petits appels Ollama séquentiels : hypothèse, actions,
-puis critères de mesure/arrêt. Chaque JSON est validé immédiatement, avec au
-plus deux tentatives par étape et six appels au total. Les actions sont bornées
+Depuis V4.1, le runner conserve les appels hypothèse et actions puis découpe
+les critères en cinq micro-appels séquentiels : `success_metrics`,
+`stop_conditions`, `expected_learning`, `duration_days` et `requirements`.
+Chaque JSON est validé immédiatement, avec au plus deux tentatives par étape
+(premier essai inclus) et quatorze appels au total. Les actions sont bornées
 à cinq, la durée à 1–7 jours, les métriques et conditions sont non vides, et les
 booléens sont stricts. Une sortie invalide n'est jamais acceptée silencieusement.
 Le runtime calcule `requires_human_approval` si le plan mentionne une dépense,
@@ -471,3 +473,40 @@ publication, email, formulaire, shell ou réseau externe. Le seul POST reste
 l'inférence vers Ollama sur loopback. Les tests V4 simulent Ollama et vérifient
 les artefacts, la sélection, les budgets, les retries bornés, les booléens et
 l'absence d'exécution externe.
+
+### V4.1 — Critères adaptés au petit modèle
+
+Les trois micro-appels textuels demandent uniquement leur champ nommé : un
+tableau court de métriques, un tableau court de conditions d'arrêt, puis une
+phrase d'apprentissage attendu. Le prompt demande 1–2 éléments courts pour les
+tableaux ; les limites strictes V4 (1–5 éléments, longueurs bornées) restent
+appliquées. La durée est demandée séparément : seul `duration_days`, entier 1–7.
+Il n'y a plus de gros objet `criteria` demandé au modèle.
+
+Le dernier micro-appel `requirements` exige exactement trois booléens :
+`requires_real_spending`, `requires_external_account`, `requires_publication`.
+Une analyse de mots seule ne suffit pas à déterminer leur absence de façon
+fiable. Ils restent donc explicitement obligatoires : aucune valeur manquante
+ne devient `false`, et aucune chaîne ou valeur numérique n'est convertie.
+`requires_human_approval` est toujours calculé par le runtime, avec les contrôles
+sensibles V4 existants ; ce champ est interdit dans les sorties du modèle.
+
+Tout JSON invalide, champ supplémentaire ou type incorrect provoque une reprise
+de la seule micro-phase concernée, sans rejouer les étapes validées. Après deux
+échecs, le runner s'arrête sans écrire les artefacts finaux ; d'anciens artefacts
+restent inchangés et ne signifient pas que cette exécution a réussi. L'assemblage
+et la revalidation du contrat V4 complet n'ont lieu qu'après toutes les étapes.
+Le schéma final reste `version: 4`, `status: planned`, avec les mêmes chemins
+fixes et le même confinement. Aucune recherche ni capacité externe n'est ajoutée.
+
+`SCOUT_NUM_PREDICT=256` reste adapté à la cible : chaque appel V4.1 conserve le
+plafond interne de 128 tokens (ou la limite opérateur si elle est inférieure).
+`SCOUT_NUM_CTX`, `SCOUT_TIMEOUT_MS`, `format:"json"`, Qwen2.5 1.5B et le debug
+local sont conservés. Sept petits appels au lieu de trois peuvent allonger la
+durée totale ; la robustesse et la durée sur Chromebook restent à valider
+matériellement. Tests simulés :
+
+```sh
+pnpm exec vitest run src/__tests__/scout-experiment.test.ts
+pnpm exec vitest run src/__tests__/scout-*.test.ts
+```
