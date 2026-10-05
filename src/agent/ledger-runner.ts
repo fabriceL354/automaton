@@ -17,7 +17,7 @@ const LOCK = ".economic-ledger.lock";
 
 function missing(error: unknown): boolean { return (error as NodeJS.ErrnoException)?.code === "ENOENT"; }
 
-async function readConfined(root: string, name: string, maxBytes: number): Promise<string | undefined> {
+export async function readConfined(root: string, name: string, maxBytes: number): Promise<string | undefined> {
   const target = await safePath(root, name);
   let file;
   try { file = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW); }
@@ -32,7 +32,7 @@ async function readConfined(root: string, name: string, maxBytes: number): Promi
 }
 
 /** Same-directory exclusive temporary file + fsync + atomic rename. */
-async function atomicWrite(root: string, name: typeof LEDGER | typeof REPORT, content: string, validate: (raw: string) => unknown): Promise<void> {
+export async function atomicWrite(root: string, name: string, content: string, validate: (raw: string) => unknown): Promise<void> {
   if (Buffer.byteLength(content) > LEDGER_LIMITS.maxBytes) throw new Error("Economic artifact exceeds size limit");
   validate(content);
   const target = await safePath(root, name);
@@ -56,7 +56,7 @@ async function atomicWrite(root: string, name: typeof LEDGER | typeof REPORT, co
 }
 
 /** Exclusive across Scout processes; never steal or auto-expire a stale lock. */
-async function locked<T>(root: string, operation: () => Promise<T>): Promise<T> {
+export async function locked<T>(root: string, operation: () => Promise<T>): Promise<T> {
   await safePath(root, LOCK, true);
   const lockPath = path.join(root, LOCK);
   let lock;

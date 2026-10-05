@@ -89,6 +89,9 @@ export function createLocalWorkspaceTools(root = scoutWorkspaceRoot()): Automato
         if (/^\.?economic-(?:ledger|report)/i.test(path.basename(path.resolve(root, args.path)))) {
           return "ERROR: economic files are runtime-controlled";
         }
+        if (/^\.?approval(?:[.-]|$)/i.test(path.basename(path.resolve(root, args.path)))) {
+          return "ERROR: approval files are runtime-controlled";
+        }
         try {
           const target = await safePath(root, args.path, true);
           const file = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);

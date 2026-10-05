@@ -1,4 +1,4 @@
-# Scout V5 Economic Ledger (local-only)
+# Scout V6 Approval Gate (local-only)
 
 Scout utilise Ollama local pour l’inférence et un workspace confiné pour ses
 fichiers. V2 ajoute uniquement des lectures Web publiques HTTPS. Aucun Conway,
@@ -10,7 +10,9 @@ L’API Ollama locale conserve son POST d’inférence ; ce POST ne va jamais au
 
 ## Démarrer
 
-Prérequis : Node.js 20+, pnpm 10.28.1, Ollama lancé localement et modèle installé.
+Prérequis : Node.js 20+, pnpm 10.28.1. Les modes local/opportunity/experiment
+nécessitent aussi Ollama lancé localement et un modèle installé. Les modes
+ledger/approval ne nécessitent ni Ollama, ni mission, ni réseau.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -678,3 +680,195 @@ Les tests utilisent uniquement des fichiers temporaires et des événements
 simulés, sans Internet ni Ollama. Ils couvrent également les échecs de renommage,
 la concurrence, les liens dangereux et le CLI réel. La validation matérielle
 sur Chromebook reste à effectuer séparément après intégration.
+
+## V6 — Approval Gate local, sans exécution
+
+`SCOUT_MODE=approval` ne fait aucun appel au modèle, au Web ou à un service
+externe. Il ne crée ni compte ni message, ne publie rien, n'exécute aucune action
+proposée, aucun shell, aucune transaction et n'enregistre **aucune dépense V5**.
+Une approbation signifie uniquement une autorisation locale du plan exact,
+avec son plafond en centimes et ses capacités précises. Ce n'est pas une preuve
+de paiement ni une preuve d'identité civile.
+
+### Commandes exactes sur le Chromebook
+
+Depuis le dépôt, sur `local-ollama-only`, après intégration du bundle :
+
+```sh
+pnpm build
+pnpm exec vitest run src/__tests__/scout-approval.test.ts
+export SCOUT_MODE=approval
+node dist/index.js --run
+cat ~/.automaton/scout-workspace/approval-report.txt
+```
+
+`experiment.json` V4/V4.1 et `economic-ledger.json` V5 doivent déjà être présents
+et valides dans ce workspace. V6 refuse leur absence ; il ne les crée ni ne les
+répare. Un budget positif exige une réservation V5 correspondante, intacte et
+non consommée/libérée, du même montant. Le cas matériel attendu est une demande
+`pending`, plafond 1000 centimes, capacité `real_spending`.
+
+Lire toutes les actions proposées, les capacités et le montant dans le rapport,
+puis remplacer `IDENTIFIANT_EXACT_COPIE_DU_RAPPORT` ci-dessous par le véritable
+identifiant `request-…`. Le placeholder lui-même est refusé.
+
+```sh
+node dist/index.js --approve IDENTIFIANT_EXACT_COPIE_DU_RAPPORT
+node dist/index.js --run
+cat ~/.automaton/scout-workspace/approval-report.txt
+cat ~/.automaton/scout-workspace/approval.json
+```
+
+Pour **refuser au lieu d'approuver**, sur une demande encore pending :
+
+```sh
+node dist/index.js --deny IDENTIFIANT_EXACT_COPIE_DU_RAPPORT
+```
+
+Un identifiant absent, `yes`, `true`, `latest`, `*`, `approve-all`, un identifiant
+inconnu ou une décision rejouée est refusé. Aucun texte de mission, fichier de
+réponse du modèle ou variable d'environnement ne peut approuver/refuser. Les
+commandes de décision sont réservées au mode explicitement activé `approval`.
+`human_reference` est construite par le CLI (`local-cli:approve:request-…` ou
+`local-cli:deny:request-…`) et n'est jamais fournie par Ollama.
+
+Vérifier les soldes après l'approbation, sans relancer de planification :
+
+```sh
+cat ~/.automaton/scout-workspace/economic-ledger.json
+```
+
+Pour la fixture matérielle annoncée, ils doivent rester :
+
+| Champ V5 | Centimes |
+| --- | ---: |
+| `initial_capital_cents` | 10000 |
+| `available_balance_cents` | 9000 |
+| `reserved_balance_cents` | 1000 |
+| `total_recorded_expenses_cents` | 0 |
+| `total_recorded_revenue_cents` | 0 |
+| `realized_net_result_cents` | 0 |
+
+V6 ne touche à aucun octet du ledger : une réservation reste une réservation.
+La commande `--run` vérifie l'état courant, sans nouvelle approbation implicite.
+
+### Fichiers, périmètre et réexamen explicite
+
+Dans le workspace :
+
+- `approval-request.json` : version 6, UUID runtime, date, identifiant V5 de
+  l'expérience, actions précises, montant EUR, indicateurs sensibles, capacités,
+  hashes du plan/ledger, référence de réservation, fingerprint et état strict
+  `pending`, `approved` ou `denied`.
+- `approval.json` : uniquement pour la demande courante approuvée, UUID runtime,
+  date, identifiants et fingerprint liés, montant/capacités exacts et référence
+  de la commande humaine. Sa présence seule ne vaut **jamais** autorisation.
+- `approval-report.txt` : actions, montant, capacités, identifiant exact, état et
+  rappel explicite : `Aucune dépense ni action externe n'a été exécutée par Scout.`
+
+Les capacités `real_spending`, `external_account` et `publication` correspondent
+exactement aux indicateurs V4 validés ; elles ne s'accordent pas mutuellement.
+Si seul `requires_human_approval` est vrai, sans ces trois indicateurs,
+`other_sensitive_action` conserve explicitement cette exigence. Un plan sans
+aucune exigence sensible n'obtient pas d'autorisation inutile. Les textes ne sont
+jamais exécutés ; V6 n'est pas un interpréteur de leur sémantique. Les futurs
+exécuteurs devront vérifier leurs propres opérations concrètes, sans déduire de
+ces catégories une permission générale.
+
+Le fingerprint lie l'identifiant runtime, l'expérience exacte, les actions,
+les capacités, le montant, les hashes et la réservation. L'identifiant
+`experiment_id` reste le hash canonique utilisé par V5. V6 lie aussi les **octets**
+du plan et du ledger : même un changement de mise en forme ou une entrée V5 sans
+rapport invalide conservativement la liaison courante. Toute consommation ou
+libération de la réservation rend celle-ci impropre à une nouvelle demande.
+Un plan à 0 EUR peut demander compte/publication sans réservation positive,
+mais exige toujours un ledger V5 valide et une autorisation de montant nul.
+
+Après modification volontaire du plan et sa validation/réservation V5, ou pour
+réexaminer un refus, utiliser explicitement :
+
+```sh
+SCOUT_MODE=approval node dist/index.js --new-request
+cat ~/.automaton/scout-workspace/approval-report.txt
+```
+
+Cette commande crée un **nouvel** identifiant et fingerprint pending. L'ancienne
+décision reste dans l'historique privé et n'autorise plus la demande courante.
+L'ancienne vue `approval.json` est retirée lors de ce réexamen explicite. Une
+ancienne demande denied ne devient jamais approved. Des vues modifiées ou
+corrompues bloquent également `--new-request` : ce n'est pas un moyen de réparer
+ou contourner une incohérence.
+
+### Ancrage d'intégrité hors de portée du modèle
+
+Un simple SHA-256 éditable avec son JSON ne suffit pas à prouver une décision.
+V6 conserve donc l'historique autoritatif `state.json`, authentifié par HMAC-SHA256,
+et une clé d'intégrité aléatoire locale de 32 octets dans un répertoire privé
+**frère du workspace**, choisi uniquement par le runtime :
+
+```text
+~/.automaton/.scout-approval-<hash-du-chemin-workspace>/
+  integrity-key
+  state.json
+```
+
+Ce secret technique n'est ni une clé API, ni un credential externe, ni une donnée
+bancaire. Il n'est jamais inclus dans les rapports/artefacts publics, envoyé au
+modèle ou au réseau. Répertoire 0700, clé et fichiers créés en 0600 ; aucune
+régénération automatique d'une clé perdue. Les outils confinés du modèle ne
+peuvent ni lire ni écrire ce répertoire. `write_file` refuse également toutes
+les vues d'approbation dans le workspace. L'historique est borné à 100 demandes
+et 512 KiB ; aucune purge automatique.
+
+Chaque lecture authentifie l'historique, revalide ses schémas stricts, compare
+les vues exactes et vérifie les artefacts V4/V5 actuels. Une modification manuelle
+de `approval.json`, même apparemment bénigne, est rejetée. Le contenu local
+signé ne représente aucune exécution et ne doit jamais devenir un outil modèle.
+
+**Frontière de confiance :** le CLI et le compte système opérateur sont fiables.
+Ce mécanisme protège contre le modèle et la falsification isolée des fichiers
+du workspace. Il ne peut pas prouver qu'un humain physique a tapé la commande,
+ni résister à un administrateur/logiciel compromis contrôlant le même compte,
+le code, la clé ou une restauration complète d'une ancienne sauvegarde signée.
+Une garantie anti-rollback contre cet acteur exigerait un ancrage externe ou
+matériel, hors périmètre V6. Ne pas exposer ce CLI comme outil du modèle.
+
+### Atomicité, concurrence et arrêt fail-closed
+
+V6 partage `.economic-ledger.lock` avec V5 et refuse les opérations concurrentes
+ou un verrou orphelin. Aucun verrou n'est volé. Les fonctions V5 de lecture
+confinée et d'écriture atomique sont réutilisées : fichiers ordinaires uniquement,
+liens symboliques/physiques multiples refusés, temporaire exclusif, vérification,
+`fsync`, renommage atomique et synchronisation du répertoire. Les entrées V4/V5
+sont relues avant et après écriture ; une modification concurrente provoque une
+erreur. Ne pas lancer le planificateur V4 en parallèle du gate.
+
+L'historique authentifié est écrit avant les vues. Les fichiers sont atomiques
+**individuellement**, pas comme un ensemble transactionnel. Une panne entre deux
+écritures laisse une incohérence visible qui bloque les relances ; aucune décision
+n'est inférée, rejouée ou promue depuis un temporaire. Un ancien rapport peut
+subsister après une erreur : il ne constitue pas une autorisation vérifiée.
+
+En cas d'erreur d'intégrité, de fichiers manquants, de vue partielle ou de verrou :
+arrêter les relances, conserver une copie du workspace et du répertoire privé,
+vérifier qu'aucun processus n'écrit, puis examiner l'erreur humainement. Ne pas
+éditer les JSON, supprimer la clé ou effacer le journal pour débloquer une
+approbation. Une restauration exige une sauvegarde **complète et cohérente** et
+une décision humaine ; aucun outil de réparation automatique n'est fourni.
+Préserver les fichiers invalides pour analyse. Un réexamen normal utilise
+`--new-request` seulement lorsque les artefacts et vues sont intègres.
+
+### Validation logicielle et matérielle
+
+```sh
+git diff --check
+pnpm build
+pnpm exec vitest run src/__tests__/scout-approval.test.ts
+pnpm exec vitest run src/__tests__/scout-*.test.ts
+```
+
+Les tests V6 couvrent décisions/identifiants explicites, refus et réexamen,
+liaisons V4/V5, montants et capacités, corruption/falsification, liens dangereux,
+échecs d'écriture, concurrence, invariance du ledger et CLI sans Ollama.
+Ces tests utilisent des fixtures temporaires. La validation matérielle sur
+Chromebook reste distincte et doit être effectuée après intégration.
