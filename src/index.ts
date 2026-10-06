@@ -6,10 +6,11 @@ import { runExperimentScout } from "./agent/experiment-runner.js";
 import { runApprovalScout, parseApprovalCommand } from "./agent/approval-gate.js";
 import { runRevenueScout, parseRevenueCommand } from "./agent/revenue-runner.js";
 import { runExternalScout, runExternalApprovalScout, parseExternalCommand } from "./agent/external-gateway.js";
+import { runProjectScout, parseProjectCommand } from "./agent/project-manager.js";
 import { runLedgerScout } from "./agent/ledger-runner.js";
 
-const VERSION = "0.8.0";
-const HELP = `Scout V8 External Action Gateway (local-only) v${VERSION}
+const VERSION = "0.9.0";
+const HELP = `Scout V9 Multi-Project Experiment Manager (local-only) v${VERSION}
 
 Usage:
   automaton --run          Run Scout from ~/.automaton/scout-workspace/MISSION.txt
@@ -25,6 +26,23 @@ Usage:
   automaton --deny-external <request_id>     Explicit V6 denial (SCOUT_MODE=approval)
   automaton --execute <action_id> --approval-request-id <request_id> [--preview]
                           One HTTPS POST, at most once (SCOUT_MODE=external)
+  automaton --create-batch [--preview]                       (SCOUT_MODE=projects)
+  automaton --create-project <batch_id> --name <text> --hypothesis <text> --budget-cents <0..1000> --duration-days <1..7> [--preview]
+  automaton --reserve-project <project_id> --experiment-id <id> [--preview]
+  automaton --approve-project <project_id> --experiment-id <id> --request-id <id> [--preview]  (SCOUT_MODE=approval)
+  automaton --deny-project <project_id> --experiment-id <id> --request-id <id> [--preview]     (SCOUT_MODE=approval)
+  automaton --start-project <project_id> --experiment-id <id> --request-id <id> [--preview]
+  automaton --cancel-project <project_id> --experiment-id <id> [--preview]
+  automaton --create-asset <project_id> --experiment-id <id> [--preview]
+  automaton --activate-asset <project_id> --experiment-id <id> --asset-id <id> [--preview]
+  automaton --close-experiment <project_id> --experiment-id <id> --request-id <id> --expense-cents <n> --revenue-cents <n> --classification <successful|failed|inconclusive|cancelled> --asset-policy <keep|retire> [--preview]
+  automaton --record-passive-revenue <project_id> --experiment-id <id> --asset-id <id> --receipt-id <receipt-UUID> --revenue-cents <n> [--preview]
+  automaton --retire-asset <project_id> --experiment-id <id> --asset-id <id> [--preview]
+  automaton --link-external-action <project_id> --experiment-id <id> --action-id <id> --request-id <V8_request_id> [--preview]
+  automaton --list-projects
+  automaton --inspect-project <project_id>
+  V8 scoped execute: append --project-id <id> --experiment-id <id> before --preview.
+  V9 is local accounting/lifecycle only. NO REAL MONEY IS SPENT BY V9.
   automaton --version      Show version
   automaton --help         Show this help
 
@@ -41,7 +59,7 @@ Environment:
                           V3.1 caps candidate/detail calls at 128/256
   SCOUT_TIMEOUT_MS        Local inference timeout: 1000–1800000 ms (default: 300000)
   SCOUT_DEBUG_ACTIONS     1 prints rejected raw actions locally (default: 0)
-  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue or external; no implicit fallback
+  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue, external or projects; no implicit fallback
   SCOUT_V8_WEBHOOK_URL     Operator public HTTPS:443 URL; no credentials/query/fragment
   SCOUT_INITIAL_CAPITAL_EUR  Ledger initialization only: 0–10000 EUR, max 2 decimals (default: 100)
   SCOUT_BUDGET_EUR         Positive integer budget for opportunity mode (default: 100, max: 10000)
@@ -58,6 +76,11 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 0) {
     console.log(HELP);
+    return;
+  }
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) &&
+      (scoutMode() === "projects" || (["--approve-project", "--deny-project"].includes(args[0]) && scoutMode() === "approval"))) {
+    await runProjectScout({ command: parseProjectCommand(args), onEvent: message => console.log(message) });
     return;
   }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && scoutMode() === "external") {
@@ -84,7 +107,7 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "-v":
-      console.log(`Scout V8 External Action Gateway (local-only) v${VERSION}`);
+      console.log(`Scout V9 Multi-Project Experiment Manager (local-only) v${VERSION}`);
       return;
     case "--run": {
       const mode = scoutMode();

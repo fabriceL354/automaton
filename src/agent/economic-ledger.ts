@@ -215,6 +215,14 @@ export function reserveExperiment(ledger: EconomicLedger, plan: ExperimentPlan):
   return append(current, "reserve", ref.budget_cents, "Réservation comptable uniquement ; approbation humaine en attente", ref, null);
 }
 
+/** Trusted V9 host adapter: the same V5 reservation/replay rules, unique scoped
+ * reference, integer cents. Not exposed as a model tool or generic CLI event. */
+export function reserveProjectReference(ledger: EconomicLedger, reference: ExperimentReference): EconomicLedger {
+  const current = parseEconomicLedger(JSON.stringify(ledger)), ref = parseReference(reference);
+  if (current.entries.some(e => e.type === "reserve" && e.experiment?.id === ref.id)) throw new Error("Duplicate project reservation");
+  return append(current, "reserve", ref.budget_cents, "Réservation V9 comptable ; aucun paiement", ref, null);
+}
+
 /** Trusted host API only. Not a tool, CLI input, env event, or LLM contract. */
 export type AuthorizedLedgerEvent = {
   type: "expense" | "release"; amount_cents: number; experiment_id: string; description: string;

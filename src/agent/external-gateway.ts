@@ -21,7 +21,7 @@ export interface ExternalExecution extends PingOutcome {
 interface ActionRecord { action: WebhookAction; approval: WebhookApprovalRecord; execution: ExternalExecution | null }
 interface ExternalState { version: 8; workspace: string; records: ActionRecord[] }
 export type ExternalCommand = { kind: "prepare" | "inspect" } | { kind: "preview"; actionId: string } |
-  { kind: "execute"; actionId: string; requestId: string; preview: boolean };
+  { kind: "execute"; actionId: string; requestId: string; preview: boolean; projectId?: string; experimentId?: string };
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const structured = (v: unknown) => JSON.stringify(v, null, 2) + "\n";
@@ -161,16 +161,23 @@ export function parseExternalCommand(args: string[]): ExternalCommand {
   if (args.length === 1 && args[0] === "--prepare-webhook-ping") return { kind: "prepare" };
   if (args.length === 1 && args[0] === "--inspect") return { kind: "inspect" };
   if (args.length === 2 && args[0] === "--preview") return { kind: "preview", actionId: id(args[1], "action") };
-  if ((args.length === 4 || (args.length === 5 && args[4] === "--preview")) && args[0] === "--execute" && args[2] === "--approval-request-id") {
-    return { kind: "execute", actionId: id(args[1], "action"), requestId: id(args[3], "request"), preview: args.length === 5 };
+  const preview = args.at(-1) === "--preview", base = preview ? args.slice(0, -1) : args;
+  if ((base.length === 4 || base.length === 8) && base[0] === "--execute" && base[2] === "--approval-request-id") {
+    const command: Extract<ExternalCommand, { kind: "execute" }> = { kind: "execute", actionId: id(base[1], "action"), requestId: id(base[3], "request"), preview };
+    if (base.length === 8) {
+      if (base[4] !== "--project-id" || base[6] !== "--experiment-id") throw new Error("Exact V9 scope flags required");
+      command.projectId = id(base[5], "project"); command.experimentId = hash(base[7]);
+    }
+    return command;
   }
   throw new Error("Use --prepare-webhook-ping, --preview <action_id>, --inspect or --execute <action_id> --approval-request-id <request_id> [--preview]");
 }
 function validateCommand(command: ExternalCommand): ExternalCommand {
-  exact(command, command.kind === "execute" ? ["kind", "actionId", "requestId", "preview"] : command.kind === "preview" ? ["kind", "actionId"] : ["kind"]);
+  exact(command, command.kind === "execute" ? ["kind", "actionId", "requestId", "preview", ...(Object.hasOwn(command, "projectId") || Object.hasOwn(command, "experimentId") ? ["projectId", "experimentId"] : [])] : command.kind === "preview" ? ["kind", "actionId"] : ["kind"]);
   if (command.kind === "execute") {
     if (typeof command.preview !== "boolean") throw new Error("Strict preview boolean required");
-    return parseExternalCommand(["--execute", command.actionId, "--approval-request-id", command.requestId, ...(command.preview ? ["--preview"] : [])]);
+    if (Object.hasOwn(command, "projectId") || Object.hasOwn(command, "experimentId")) { id(command.projectId, "project"); hash(command.experimentId); }
+    return parseExternalCommand(["--execute", command.actionId, "--approval-request-id", command.requestId, ...(command.projectId !== undefined ? ["--project-id", command.projectId, "--experiment-id", command.experimentId!] : []), ...(command.preview ? ["--preview"] : [])]);
   }
   if (command.kind === "preview") return parseExternalCommand(["--preview", command.actionId]);
   if (command.kind === "prepare" || command.kind === "inspect") return command;
@@ -206,6 +213,13 @@ export async function runExternalScout(options: { root?: string; command: Extern
       if (command.kind === "execute") {
         if (command.requestId !== entry.approval.request.request_id || entry.approval.request.status !== "approved" || entry.approval.decision?.status !== "approved") throw new Error("Exact approved V6 webhook request_id required");
         if (entry.execution !== null) throw new Error("Action already attempted; replay prohibited, including after timeout/failure");
+        const verifyScope = async () => {
+          const { verifyExternalProjectScope } = await import("./project-manager.js");
+          await verifyExternalProjectScope(root, entry!.action.action_id, entry!.approval.request.request_id,
+            sha(JSON.stringify(entry!.action)), entry!.approval.request.request_fingerprint,
+            command.projectId ? { projectId: command.projectId, experimentId: command.experimentId! } : undefined);
+        };
+        await verifyScope();
         if (!command.preview) {
           endpointMatches(entry, configuredEndpoint().fingerprint);
           // Durable at-most-once intent BEFORE DNS or a socket. Crash from here
@@ -220,6 +234,7 @@ export async function runExternalScout(options: { root?: string; command: Extern
           const reread = await load(root);
           if (!same(reread.state, state)) throw new Error("External intent changed before connection");
           await checkViews(root, entry); endpointMatches(entry, configuredEndpoint().fingerprint);
+          await verifyScope();
           const outcome = await sendWebhookPing(endpoint.raw, entry.action.action_id, options.transport);
           if (!same((await load(root)).state, state)) throw new Error("External intent changed after network attempt");
           await checkViews(root, entry);
@@ -251,4 +266,12 @@ export async function runExternalApprovalScout(options: { root?: string; args: s
     await persist(root, replaceLast(state, next), key);
     const message = report(next); options.onEvent?.(message); return message;
   });
+}
+
+/** Read-only V9 linkage adapter. Caller must hold the shared V5 lock. */
+export async function readExternalBinding(root: string): Promise<ActionRecord | undefined> {
+  const { state } = await load(root), entry = state?.records.at(-1);
+  await checkViews(root, entry);
+  if (entry) endpointMatches(entry, configuredEndpoint().fingerprint);
+  return entry;
 }

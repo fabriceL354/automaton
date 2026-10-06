@@ -1,4 +1,4 @@
-# Scout V8 External Action Gateway (inférence locale)
+# Scout V9 Multi-Project Real Experiment Manager (inférence locale)
 
 Scout utilise Ollama local pour l’inférence et un workspace confiné pour ses
 fichiers. V2 ajoute uniquement des lectures Web publiques HTTPS. Aucun Conway,
@@ -15,7 +15,7 @@ n'ajoute aucun outil réseau au modèle. Voir la procédure V8 en fin de documen
 
 Prérequis : Node.js 20+, pnpm 10.28.1. Les modes local/opportunity/experiment
 nécessitent aussi Ollama lancé localement et un modèle installé. Les modes
-ledger/approval/revenue ne nécessitent ni Ollama, ni mission, ni réseau.
+ledger/approval/revenue/projects ne nécessitent ni Ollama, ni mission, ni réseau.
 Le mode external ne nécessite ni Ollama ni mission ; seule son exécution réelle
 ouvre une connexion réseau, après préparation et approbation distinctes.
 
@@ -1153,7 +1153,11 @@ d'une réponse complète bornée peuvent être enregistrés.
 
 ### Procédure Chromebook, avec votre endpoint de test contrôlé
 
-Cette procédure reste **à valider matériellement**. Fournir vous-mêmes une URL
+Validation matérielle V8 rapportée par l’opérateur le 6 octobre 2026 : build et
+102 tests réussis, premier HTTP 404 consommé sans rejeu, puis HTTP 200 réel
+sur un endpoint contrôlé, empreintes du ledger et du résultat V7 inchangées.
+Cette validation porte sur V8 au commit `69aad23`, pas sur V9.
+Pour un prochain test, fournir vous-mêmes une URL
 HTTPS de test jetable/contrôlée, sans authentification et sans effet économique.
 Les tests automatisés ci-dessous simulent le réseau ; ils n'envoient aucun POST
 Internet. Exécuter depuis le dépôt sur `local-ollama-only` :
@@ -1294,3 +1298,254 @@ ou distant anti-rollback n'est ajouté. Sauvegarder ensemble workspace et état
 privé, avec permissions et chemin absolu, sans restaurer un ancien état pour
 relancer une action. La garantie est « au plus une tentative » dans cet état
 local intact, pas une garantie de livraison exactement une fois au serveur.
+
+## Scout V9 — Multi-Project Real Experiment Manager
+
+**NO REAL MONEY IS SPENT BY V9**
+
+V9 coordonne localement un premier batch, ses expériences, leurs réservations
+comptables, leurs décisions humaines et le cycle de vie de leurs actifs.
+Aucun paiement, achat, compte externe, publication, credential financier ou
+connexion bancaire n'est ajouté. Aucune inférence Ollama, tâche permanente,
+base de données, polling ou action externe automatique. V10/V11 ne sont pas
+implémentées. Les montants saisis sont des déclarations comptables humaines,
+jamais des instructions de paiement.
+
+### Architecture et plafonds
+
+- `project-manager.ts` : orchestration CLI, audit des références au ledger et
+  validation des liaisons V8 sous le verrou partagé V5–V9.
+- `project-model.ts` : grammaire stricte, identités, transitions rejouables et
+  événements comptables attendus.
+- `project-store.ts` : historique authentifié et projections atomiques.
+- `asset-lifecycle.ts` : échéances, états d'actif et métriques en cents entiers.
+- V5 reste l'unique ledger (`economic-ledger.json`). Son adaptateur V9 réutilise
+  exactement les règles de réservation et de rejeu V5. Les clôtures emploient
+  les mêmes primitives d'événements autorisés que V7. Aucun second ledger.
+- V6 garde ses contrats stricts de demande/décision. Chaque demande V9 inclut
+  le project_id, l'experiment_id, le fingerprint du plan, la réservation exacte,
+  le plafond et les capabilities. Le fingerprint de ledger vise le préfixe au
+  moment de la réservation : l'ajout légitime de B n'invalide pas A, mais tout
+  changement de la réservation de A hors V9 est refusé.
+
+| Limite runtime non configurable | Valeur |
+| --- | --- |
+| `MAX_ACTIVE_PROJECTS` | 2 |
+| `MAX_PROJECT_BUDGET_CENTS` | 1000 cents, EUR uniquement |
+| `MAX_BATCH_BUDGET_CENTS` | 2000 cents au total |
+| `MAX_EXPERIMENT_DURATION_DAYS` | 7 jours, minimum 1 |
+| Historique | 256 événements, 1 MiB ; aucune purge automatique |
+
+Cette première V9 accepte **un seul batch explicite et deux projets au total**,
+y compris les projets clôturés/annulés. Elle ne recycle pas automatiquement une
+place libérée et ne crée pas de batch #2. Les plafonds s'appliquent aux budgets
+planifiés cumulés, pas seulement au solde restant. Deux réservations de 1000
+cents sur 10000 cents de capital donnent 8000 disponibles et 2000 réservés.
+Un troisième projet est refusé même avec du capital disponible.
+
+### Identités, transitions et temps
+
+Le runtime crée les batch_id/project_id/asset_id (UUID), ainsi que les demandes
+et décisions V6. L'experiment_id est le SHA-256 du plan canonique incluant son
+project_id unique. Chaque mutation d'expérience exige le couple exact
+project_id/experiment_id ; les opérations sur un actif existant exigent aussi
+son asset_id. Ni `latest`, `current`, `all`, wildcard, sélection implicite du
+premier projet, ni approbation globale. Champs inconnus et doublons refusés.
+
+Parcours projet : `planned → reserved → approved → active`, puis
+`experiment_closed` si l'actif est conservé, ou `fully_closed` sinon. Un projet
+non démarré peut être explicitement `cancelled` : sa réservation est libérée.
+Une demande refusée reste attachée au projet réservé et bloque le démarrage ;
+il faut annuler explicitement ce projet. Pas de réarmement implicite.
+
+Le démarrage enregistre `started_at` et `experiment_deadline`, calculée à partir
+de la durée approuvée. Il ne lance aucun travail extérieur. `--inspect-project`
+et `--list-projects` fournissent `timing.activity` (`not_started`, `active`,
+`expired`, `closed`) et `closable`. À l'échéance exacte, l'expérience est
+**expirée** : création/activation d'actif et action V8 liée sont refusées. La
+phase stockée reste `active` jusqu'à la clôture explicite, afin de ne jamais
+inventer une transition ni libérer une réservation silencieusement. Il n'y a
+pas de scheduler et aucune prolongation automatique. L'horloge système doit
+être fiable ; les retours avant les événements déjà enregistrés sont refusés.
+
+Un actif est absent (`null`, affiché `none`) ou passe par `created`, `active`,
+`passive_monitoring`, `retired`. `--create-asset` enregistre uniquement une fiche
+locale attestée par l'humain ; cette commande ne fabrique ni ne publie un
+produit. La clôture exige `--asset-policy keep|retire`. `keep` conserve un actif
+existant en suivi passif, même si le test est `failed` ou `inconclusive`.
+La classification du test (`successful`, `failed`, `inconclusive`, `cancelled`)
+ne décide jamais du potentiel économique futur de l'actif.
+
+### CLI exacte et preview
+
+Mode normal : `SCOUT_MODE=projects`. Les approbations/refus appartiennent
+exclusivement à `SCOUT_MODE=approval`. Toutes les mutations acceptent
+`--preview` : mêmes validations, mais aucune écriture du ledger, de l'historique
+ou des vues ; seul le verrou temporaire est pris puis relâché. Les IDs générés
+pendant un aperçu sont hypothétiques : copier ceux de la commande réellement
+enregistrée. Chaque commande émet du JSON avec les IDs, états et métriques.
+
+Les commandes suivantes décrivent le parcours manuel. **Ne pas saisir de
+résultats fictifs dans le workspace réel** : utiliser le script isolé de la
+section suivante pour la validation. `BATCH_ID`, `PROJECT_ID`, `EXPERIMENT_ID`,
+`REQUEST_ID` et `ASSET_ID` sont à remplacer par les valeurs exactes affichées.
+
+```sh
+SCOUT_MODE=projects node dist/index.js --create-batch --preview
+SCOUT_MODE=projects node dist/index.js --create-batch
+SCOUT_MODE=projects node dist/index.js --create-project BATCH_ID --name 'Projet A' --hypothesis 'Hypothèse à tester' --budget-cents 1000 --duration-days 7 --preview
+SCOUT_MODE=projects node dist/index.js --create-project BATCH_ID --name 'Projet A' --hypothesis 'Hypothèse à tester' --budget-cents 1000 --duration-days 7
+SCOUT_MODE=projects node dist/index.js --reserve-project PROJECT_ID --experiment-id EXPERIMENT_ID --preview
+SCOUT_MODE=projects node dist/index.js --reserve-project PROJECT_ID --experiment-id EXPERIMENT_ID
+SCOUT_MODE=approval node dist/index.js --approve-project PROJECT_ID --experiment-id EXPERIMENT_ID --request-id REQUEST_ID
+SCOUT_MODE=projects node dist/index.js --start-project PROJECT_ID --experiment-id EXPERIMENT_ID --request-id REQUEST_ID
+SCOUT_MODE=projects node dist/index.js --create-asset PROJECT_ID --experiment-id EXPERIMENT_ID
+SCOUT_MODE=projects node dist/index.js --activate-asset PROJECT_ID --experiment-id EXPERIMENT_ID --asset-id ASSET_ID
+SCOUT_MODE=projects node dist/index.js --inspect-project PROJECT_ID
+SCOUT_MODE=projects node dist/index.js --list-projects
+```
+
+La création d'un projet ne réserve pas d'argent. La réservation est distincte,
+crée la demande V6, et ne constitue ni une dépense ni une approbation. La commande
+`--deny-project PROJECT_ID --experiment-id EXPERIMENT_ID --request-id REQUEST_ID`
+en mode approval permet le refus à la place de l'approbation.
+`--cancel-project PROJECT_ID --experiment-id EXPERIMENT_ID [--preview]` en mode
+projects annule un projet avant démarrage, en libérant sa réservation.
+
+Clôture humaine explicite, avec montants à remplacer par des constatations
+réelles uniquement dans le workspace réel :
+
+```sh
+SCOUT_MODE=projects node dist/index.js --close-experiment PROJECT_ID --experiment-id EXPERIMENT_ID --request-id REQUEST_ID --expense-cents 600 --revenue-cents 400 --classification inconclusive --asset-policy keep --preview
+```
+
+Retirer `--preview` uniquement pour enregistrer cette déclaration. V5 reçoit
+les événements expense/release/revenue non nuls, avec références humaines
+uniques ; le reliquat est libéré. La réservation de B reste intacte. Une seconde
+clôture est refusée, même si les valeurs sont identiques. Les fichiers V7
+`experiment-result.json` et `economic-history.json` ne sont jamais réécrits.
+
+Pour une recette passive constatée après clôture, créer une référence de reçu
+UUID une seule fois, la conserver et la réutiliser si l'on vérifie un doublon :
+
+```sh
+node --input-type=module -e 'import { randomUUID } from "node:crypto"; console.log("receipt-" + randomUUID())'
+SCOUT_MODE=projects node dist/index.js --record-passive-revenue PROJECT_ID --experiment-id EXPERIMENT_ID --asset-id ASSET_ID --receipt-id RECEIPT_ID --revenue-cents 1300 --preview
+```
+
+Retirer `--preview` pour la déclaration humaine définitive. Un receipt_id déjà
+enregistré est refusé dans tout le batch, même pour un autre projet. Le système
+ne peut pas reconnaître une même vente déclarée sous deux références nouvelles :
+la correspondance vente/reçu reste à la charge de l'humain. Aucun secret ni
+identifiant financier ne doit être saisi comme référence ; seul `receipt-UUID`
+est accepté. Montants : chiffres décimaux entiers, pas de négatifs, float,
+notation scientifique, NaN, Infinity, signe `+` ou zéros ambigus.
+
+```sh
+SCOUT_MODE=projects node dist/index.js --retire-asset PROJECT_ID --experiment-id EXPERIMENT_ID --asset-id ASSET_ID --preview
+```
+
+Le retrait définitif ferme la fiche d'actif et bloque les recettes suivantes.
+Il ne supprime aucun produit sur Internet et ne déclenche aucune dépense.
+
+### Résultat de test et résultat lifetime
+
+Les projections projet/actif calculent les métriques à partir des événements
+V9 contrôlés contre les entrées V5. Elles ne constituent pas un second ledger.
+Le snapshot de résultat est immuable après clôture.
+
+| Métrique | Exemple demandé |
+| --- | --- |
+| `experiment_expense_cents` | 600 |
+| `experiment_revenue_cents` | 400 |
+| Résultat de test à la clôture | −200 |
+| `post_experiment_revenue_cents` | 1300 |
+| `lifetime_revenue_cents` | 1700 |
+| `lifetime_net_result_cents` | +1100 |
+
+Le revenu passif est une nouvelle entrée revenue V5 et une référence de reçu
+V9, sans réouverture, nouvelle réservation ou modification du résultat initial.
+Les dates, IDs, durée, classification et statut d'actif sont disponibles pour
+une analyse future ; aucun apprentissage V11 n'est exécuté.
+
+### Liaison V8 facultative, sans nouveau pouvoir réseau
+
+V8 garde son unique `webhook_ping` fixe et son approbation propre. V9 ne lance
+aucune action externe. Pour attribuer un ping à un projet actif non expiré,
+préparer d'abord le ping V8, puis le lier **avant son approbation V8** :
+
+```sh
+SCOUT_MODE=projects node dist/index.js --link-external-action PROJECT_ID --experiment-id EXPERIMENT_ID --action-id ACTION_ID --request-id V8_REQUEST_ID --preview
+SCOUT_MODE=projects node dist/index.js --link-external-action PROJECT_ID --experiment-id EXPERIMENT_ID --action-id ACTION_ID --request-id V8_REQUEST_ID
+SCOUT_MODE=approval node dist/index.js --approve-external V8_REQUEST_ID
+SCOUT_MODE=external node dist/index.js --execute ACTION_ID --approval-request-id V8_REQUEST_ID --project-id PROJECT_ID --experiment-id EXPERIMENT_ID --preview
+```
+
+L'approbation économique du projet ne remplace jamais celle du ping. La liaison
+historique authentifiée fixe action_id, request_id, leurs fingerprints,
+project_id et experiment_id ; elle ne peut pas être déplacée vers B. Toute
+exécution liée sans les IDs de projet, avec ceux de B, après échéance ou clôture
+est refusée avant le réseau. Les pings V8 autonomes non liés conservent leur
+fonctionnement V8. Aucune modification du payload, URL, limite ou capability
+V8 ; aucun POST réel dans la validation V9 ci-dessous.
+
+### Stockage, intégrité et concurrence
+
+Le workspace reste `~/.automaton/scout-workspace`. Les vues runtime sont
+`project-batch.json`, `projects.json`, `assets.json` et `project-report.txt`.
+Elles sont comparées octet par octet à l'historique authentifié avant toute
+opération. L'historique privé `state.json` et la clé `integrity-key` sont hors
+du workspace modèle, dans `.scout-projects-<hash-du-chemin-workspace>`, voisin
+de celui-ci. Permissions 0700/0600. `write_file` interdit les fichiers de
+projet/actif et les temporaires économiques ; confinement et refus des liens
+empêchent l'accès aux clés privées.
+
+Chaque événement conserve les préfixes exacts du ledger avant/après et les IDs
+d'entrées associées. Leur audit rejoue les transitions et vérifie types,
+montants, réservation, description et référence humaine. Les ajouts V5/V7
+légitimes sur d'autres expériences sont compatibles ; consommer une réservation
+V9 en dehors de V9 provoque un refus à l'audit. Ne pas employer l'API hôte V5
+pour modifier les réservations V9.
+
+Toutes les opérations partagent le verrou exclusif V5–V8. En concurrence, une
+seule gagne ; les autres échouent sans attendre ni voler le verrou. Un verrou
+orphelin exige une inspection humaine. L'intention authentifiée `prepared` est
+synchronisée avant toute écriture économique, puis viennent le ledger, les
+vues et enfin `complete`. Un échec avant le premier rename laisse l'état
+précédent intact. Une panne ultérieure peut laisser une transaction partielle :
+V9 s'arrête fail-closed et ne rejoue ni ne répare automatiquement. Conserver
+ensemble les preuves, l'historique privé et le ledger pour investigation.
+
+La clé absente n'est jamais régénérée sur un état existant. Comme V6–V8, le
+compte système, le code hôte et l'horloge font partie de la frontière de
+confiance ; aucun mécanisme ne protège contre un administrateur contrôlant la
+clé ou restaurant l'intégralité d'une ancienne sauvegarde signée.
+
+### Validation Chromebook SANS argent réel
+
+V9 n'est pas encore validée matériellement. Sur la branche `local-ollama-only`,
+après intégration du bundle :
+
+```sh
+git branch --show-current
+git log -1 --oneline
+pnpm build
+pnpm exec vitest run src/__tests__/scout-projects.test.ts
+pnpm exec vitest run src/__tests__/scout-*.test.ts
+node scripts/scout-v9-validation.mjs
+```
+
+Le dernier script crée un dossier temporaire neuf et un capital **fictif** de
+100 EUR. Il appelle le même parseur et le même runtime que la CLI, avec un
+workspace de test isolé ; il ne lit ni ne modifie le workspace économique réel.
+Il vérifie successivement : batch explicite, deux projets à 10 EUR, troisième
+refusé, deux réservations (80 disponibles/20 réservés), approbation A inutilisable
+pour B, démarrage A, actif A conservé, clôture fictive à 600/400, doublon refusé,
+recette passive fictive de 1300, doublon de reçu refusé, lifetime +1100, B
+inchangé, ledger et historique authentifié valides. Le test d'échéance à sept
+jours est couvert par Vitest avec une horloge simulée, sans attendre sept jours.
+
+Résultat attendu : `"result": "PASS"`, avec les chemins des preuves temporaires
+et les identifiants. Le dossier reste disponible pour inspection. Aucun vrai
+POST, paiement ou modèle n'est appelé. Une nouvelle exécution du script crée
+une nouvelle fixture isolée, sans réinitialiser le ledger de production.

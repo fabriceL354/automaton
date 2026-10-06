@@ -412,3 +412,46 @@ export function decideWebhookApproval(action: WebhookAction, record: WebhookAppr
     request_fingerprint: current.request.request_fingerprint, decided_at: new Date().toISOString(), approval_id: kind === "approve" ? `approval-${randomUUID()}` : null,
     approved_capabilities: kind === "approve" ? ["webhook_ping"] : [], human_reference: `local-cli:${kind}-external:${requestId}`, status } }, action);
 }
+
+/** V9 scopes V6's existing strict request/decision contracts to one project.
+ * ledger_hash pins the reservation-time prefix: unrelated B entries do not
+ * invalidate A. V9 additionally audits that A's reservation remains intact. */
+export interface ProjectApprovalScope {
+  project_id: string; experiment_id: string; plan_hash: string; name: string;
+  max_amount_cents: number; ledger_hash: string;
+  reservation_reference: ApprovalRequest["reservation_reference"];
+}
+function projectApprovalFields(scope: ProjectApprovalScope) {
+  obj(scope, ["project_id", "experiment_id", "plan_hash", "name", "max_amount_cents", "ledger_hash", "reservation_reference"]);
+  id(scope.project_id, "project"); hash(scope.experiment_id); hash(scope.plan_hash); hash(scope.ledger_hash);
+  const amount = money(scope.max_amount_cents);
+  return { experiment_id: scope.experiment_id, opportunity_name: str(scope.name, 120),
+    action_summary: [`V9 project ${scope.project_id}`, `Plan SHA-256 ${scope.plan_hash}`, "Human accounting only; no payment or external execution"],
+    max_amount_cents: amount, currency: "EUR" as const, requires_real_spending: amount > 0,
+    requires_external_account: false, requires_publication: false,
+    requested_capabilities: [amount > 0 ? "real_spending" : "other_sensitive_action"] as Capability[],
+    experiment_hash: scope.plan_hash, ledger_hash: scope.ledger_hash, reservation_reference: scope.reservation_reference };
+}
+export function createProjectApproval(scope: ProjectApprovalScope, requestId: string, at: string): RecordEntry {
+  const base = { version: 6 as const, request_id: id(requestId, "request"), created_at: timestamp(at), ...projectApprovalFields(scope) };
+  return { request: parseRequest({ ...base, request_fingerprint: fingerprint(base), status: "pending" }), decision: null };
+}
+export function parseProjectApproval(value: unknown, scope: ProjectApprovalScope): RecordEntry {
+  const entry = obj(value, ["request", "decision"]), request = parseRequest(entry.request);
+  const { version, request_id, created_at, request_fingerprint, status, ...bound } = request;
+  if (!same(bound, projectApprovalFields(scope))) throw new Error("V6 project approval scope mismatch");
+  return { request, decision: parseDecision(entry.decision, request) };
+}
+export function decideProjectApproval(value: RecordEntry, scope: ProjectApprovalScope, requestId: string,
+  kind: "approve" | "deny", at: string, approvalId: string | null): RecordEntry {
+  const current = parseProjectApproval(value, scope), request = current.request;
+  if (request.request_id !== id(requestId, "request") || request.status !== "pending") throw new Error("Exact pending project request required");
+  if (kind !== "approve" && kind !== "deny") throw new Error("Explicit project decision required");
+  const approved = kind === "approve", status = approved ? "approved" : "denied";
+  const common = { version: 6, request_id: requestId, request_fingerprint: request.request_fingerprint,
+    human_reference: `local-cli:${kind}:${requestId}`, status };
+  const decision = approved ? { ...common, approval_id: id(approvalId, "approval"), approved_at: timestamp(at),
+    experiment_id: request.experiment_id, max_amount_cents: request.max_amount_cents, currency: "EUR", approved_capabilities: request.requested_capabilities }
+    : { ...common, denied_at: timestamp(at) };
+  return parseProjectApproval({ request: { ...request, status }, decision }, scope);
+}
