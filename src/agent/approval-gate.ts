@@ -349,3 +349,66 @@ export async function verifyCurrentApprovalBinding(root: string, record: RecordE
   parseDecision(record.decision, request);
   ensureCurrent(request, await readInputs(root));
 }
+
+/** V6's separate, non-economic approval contract for the sole V8 capability.
+ * Never accepted by the economic approval parser or by V7 spending checks.
+ */
+export interface WebhookAction {
+  version: 8; action_id: string; type: "webhook_ping"; status: "prepared"; created_at: string;
+  endpoint_fingerprint: string; payload_fingerprint: string; capabilities: ["webhook_ping"];
+}
+export interface WebhookApprovalRequest {
+  version: 6; target_version: 8; request_id: string; created_at: string; action_id: string;
+  action_fingerprint: string; requested_capabilities: ["webhook_ping"]; request_fingerprint: string; status: Status;
+}
+interface WebhookDecision {
+  version: 6; request_id: string; action_id: string; request_fingerprint: string; decided_at: string;
+  approval_id: string | null; approved_capabilities: ["webhook_ping"] | []; human_reference: string; status: "approved" | "denied";
+}
+export interface WebhookApprovalRecord { request: WebhookApprovalRequest; decision: WebhookDecision | null }
+export function parseWebhookAction(value: unknown): WebhookAction {
+  const d = obj(value, ["version", "action_id", "type", "status", "created_at", "endpoint_fingerprint", "payload_fingerprint", "capabilities"]);
+  if (d.version !== 8 || d.type !== "webhook_ping" || d.status !== "prepared" || !same(d.capabilities, ["webhook_ping"])) throw new Error("Only prepared webhook_ping is allowed");
+  return { version: 8, action_id: id(d.action_id, "action"), type: "webhook_ping", status: "prepared", created_at: timestamp(d.created_at),
+    endpoint_fingerprint: hash(d.endpoint_fingerprint), payload_fingerprint: hash(d.payload_fingerprint), capabilities: ["webhook_ping"] };
+}
+function webhookRequestFingerprint(base: Omit<WebhookApprovalRequest, "request_fingerprint" | "status">): string { return digest(JSON.stringify(base)); }
+export function createWebhookApproval(action: WebhookAction): WebhookApprovalRecord {
+  const parsed = parseWebhookAction(action);
+  const base = { version: 6 as const, target_version: 8 as const, request_id: `request-${randomUUID()}`, created_at: new Date().toISOString(), action_id: parsed.action_id,
+    action_fingerprint: digest(JSON.stringify(parsed)), requested_capabilities: ["webhook_ping"] as ["webhook_ping"] };
+  return { request: { ...base, request_fingerprint: webhookRequestFingerprint(base), status: "pending" }, decision: null };
+}
+export function parseWebhookApproval(value: unknown, action: WebhookAction): WebhookApprovalRecord {
+  const entry = obj(value, ["request", "decision"]), parsed = parseWebhookAction(action);
+  const r = obj(entry.request, ["version", "target_version", "request_id", "created_at", "action_id", "action_fingerprint", "requested_capabilities", "request_fingerprint", "status"]);
+  if (r.version !== 6 || r.target_version !== 8 || r.action_id !== parsed.action_id || r.action_fingerprint !== digest(JSON.stringify(parsed)) ||
+    !same(r.requested_capabilities, ["webhook_ping"]) || (r.status !== "pending" && r.status !== "approved" && r.status !== "denied")) throw new Error("V6 webhook approval binding mismatch");
+  const base = { version: 6 as const, target_version: 8 as const, request_id: id(r.request_id, "request"), created_at: timestamp(r.created_at),
+    action_id: parsed.action_id, action_fingerprint: hash(r.action_fingerprint), requested_capabilities: ["webhook_ping"] as ["webhook_ping"] };
+  if (base.created_at < parsed.created_at || r.request_fingerprint !== webhookRequestFingerprint(base)) throw new Error("V6 webhook fingerprint/time mismatch");
+  const request: WebhookApprovalRequest = { ...base, request_fingerprint: hash(r.request_fingerprint), status: r.status };
+  if (entry.decision === null) {
+    if (request.status !== "pending") throw new Error("Missing V6 webhook decision");
+    return { request, decision: null };
+  }
+  const d = obj(entry.decision, ["version", "request_id", "action_id", "request_fingerprint", "decided_at", "approval_id", "approved_capabilities", "human_reference", "status"]);
+  if (request.status === "pending" || d.version !== 6 || d.status !== request.status || d.request_id !== request.request_id || d.action_id !== parsed.action_id ||
+    d.request_fingerprint !== request.request_fingerprint || d.human_reference !== `local-cli:${request.status === "approved" ? "approve" : "deny"}-external:${request.request_id}` ||
+    !same(d.approved_capabilities, request.status === "approved" ? ["webhook_ping"] : [])) throw new Error("Invalid scoped V6 webhook decision");
+  const decidedAt = timestamp(d.decided_at);
+  if (decidedAt < request.created_at || (request.status === "denied" && d.approval_id !== null)) throw new Error("Invalid webhook decision time/id");
+  return { request, decision: { version: 6, request_id: request.request_id, action_id: parsed.action_id, request_fingerprint: request.request_fingerprint,
+    decided_at: decidedAt, approval_id: request.status === "approved" ? id(d.approval_id, "approval") : null,
+    approved_capabilities: request.status === "approved" ? ["webhook_ping"] : [], human_reference: d.human_reference as string, status: request.status } };
+}
+/** Called by the trusted V6 CLI only, never by a model or by execution. */
+export function decideWebhookApproval(action: WebhookAction, record: WebhookApprovalRecord, requestId: string, kind: "approve" | "deny"): WebhookApprovalRecord {
+  const current = parseWebhookApproval(record, action);
+  if (kind !== "approve" && kind !== "deny") throw new Error("Explicit V6 decision required");
+  if (id(requestId, "request") !== current.request.request_id || current.request.status !== "pending") throw new Error("Exact pending external request_id required");
+  const status = kind === "approve" ? "approved" : "denied";
+  return parseWebhookApproval({ request: { ...current.request, status }, decision: { version: 6, request_id: requestId, action_id: action.action_id,
+    request_fingerprint: current.request.request_fingerprint, decided_at: new Date().toISOString(), approval_id: kind === "approve" ? `approval-${randomUUID()}` : null,
+    approved_capabilities: kind === "approve" ? ["webhook_ping"] : [], human_reference: `local-cli:${kind}-external:${requestId}`, status } }, action);
+}

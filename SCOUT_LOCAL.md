@@ -1,18 +1,23 @@
-# Scout V7 Revenue Loop (local-only)
+# Scout V8 External Action Gateway (inférence locale)
 
 Scout utilise Ollama local pour l’inférence et un workspace confiné pour ses
 fichiers. V2 ajoute uniquement des lectures Web publiques HTTPS. Aucun Conway,
 wallet, paiement, compte, authentification, publication, shell accessible au
 modèle, JavaScript exécuté, navigateur interactif ou binaire téléchargé/exécuté.
-Les requêtes Web sont exclusivement GET : aucun POST/PUT/PATCH/DELETE, formulaire
-soumis, cookie, jeton, corps de requête ou référent.
+Les recherches Web V2 restent exclusivement GET : aucun POST/PUT/PATCH/DELETE,
+formulaire soumis, cookie, jeton, corps de requête ou référent.
 L’API Ollama locale conserve son POST d’inférence ; ce POST ne va jamais au Web.
+V8 ajoute un seul POST externe fixe `webhook_ping`, déclenché par le CLI après
+approbation humaine exacte. Ce mode déterministe n'utilise jamais Ollama et
+n'ajoute aucun outil réseau au modèle. Voir la procédure V8 en fin de document.
 
 ## Démarrer
 
 Prérequis : Node.js 20+, pnpm 10.28.1. Les modes local/opportunity/experiment
 nécessitent aussi Ollama lancé localement et un modèle installé. Les modes
 ledger/approval/revenue ne nécessitent ni Ollama, ni mission, ni réseau.
+Le mode external ne nécessite ni Ollama ni mission ; seule son exécution réelle
+ouvre une connexion réseau, après préparation et approbation distinctes.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -1103,3 +1108,189 @@ Les tests V7 couvrent montants/budgets/approbations, zéro/reliquat, exactitude 
 soldes, idempotence, deux expériences successives, mémoire dérivée, corruption,
 liens dangereux, interruptions d'écriture, concurrence, preview et CLI réel sans
 Ollama. Aucune validation matérielle V7 n'est revendiquée avant le test Chromebook.
+
+## V8 — External Action Gateway : un ping fixe approuvé
+
+La seule capability V8 est `webhook_ping`. Le runtime prépare un objet strict,
+obtient une décision explicite V6, puis peut envoyer **au plus un POST HTTPS par
+action**. Aucun appel Ollama, texte LLM, URL/payload/header libre, client HTTP
+générique, paiement, achat, compte, publication arbitraire, email ou commande
+système n'est ajouté. Le modèle ne peut ni approuver ni exécuter le CLI.
+
+### Configuration et transport
+
+L'opérateur fournit uniquement `SCOUT_V8_WEBHOOK_URL`, conservée dans son
+processus. Elle est obligatoire pour les commandes V8, y compris l'approbation.
+L'URL doit être HTTPS, port 443 (implicite ou explicite), sans username/password,
+query string ni fragment. Son chemin est autorisé ; ne pas y placer de secret
+ou de credential. L'URL complète n'est persistée ni dans les artefacts, ni dans
+l'historique privé, ni dans les rapports. La liaison utilise le SHA-256 de la
+**chaîne exacte** configurée : même un changement de graphie équivalent rend
+l'approbation précédente inutilisable pour cette nouvelle configuration.
+
+Les adresses locales, privées, loopback, link-local, réservées et multicast
+sont refusées. Préparation, aperçu et approbation ne font aucune résolution DNS.
+Juste avant la connexion, le runtime résout à nouveau le nom, exige que toutes
+les réponses soient publiques, puis fixe une seule IP pour la connexion sans
+seconde résolution. Une adresse IP littérale doit elle aussi être publique.
+TLS vérifie le certificat pour la destination ; aucune désactivation n'est
+prévue. Aucun proxy, cookie, Authorization, clé API, OAuth ou header opérateur.
+
+Le JSON envoyé est construit exclusivement par le runtime :
+
+```json
+{"version":8,"action":"webhook_ping","action_id":"action-UUID_RUNTIME","message":"Scout V8 external action test"}
+```
+
+L'identifiant UUID est généré à la préparation et le payload est lié à son
+approbation par SHA-256. Taille maximale : 2 KiB. Le transport utilise POST,
+`Content-Type: application/json`, `Accept: application/json` et la longueur
+calculée du corps. Il ne suit aucune redirection, ne change jamais de méthode
+et ne réessaie jamais. Le délai total DNS/POST/réponse est de 10 secondes maximum.
+En-têtes de réponse limités à 8 KiB, corps à 16 KiB ; aucun corps reçu n'est
+interprété, exécuté ou conservé. Seuls le statut HTTP, la taille et le SHA-256
+d'une réponse complète bornée peuvent être enregistrés.
+
+### Procédure Chromebook, avec votre endpoint de test contrôlé
+
+Cette procédure reste **à valider matériellement**. Fournir vous-mêmes une URL
+HTTPS de test jetable/contrôlée, sans authentification et sans effet économique.
+Les tests automatisés ci-dessous simulent le réseau ; ils n'envoient aucun POST
+Internet. Exécuter depuis le dépôt sur `local-ollama-only` :
+
+```sh
+git branch --show-current
+pnpm build
+pnpm exec vitest run src/__tests__/scout-external.test.ts
+pnpm exec vitest run src/__tests__/scout-*.test.ts
+```
+
+Dans le même terminal Bash, saisir votre URL (elle n'est pas affichée ni mise
+en clair dans l'historique des commandes par cette saisie) :
+
+```sh
+read -r -s -p 'URL HTTPS de test contrôlée : ' SCOUT_V8_WEBHOOK_URL
+printf '\n'
+export SCOUT_V8_WEBHOOK_URL
+```
+
+Conserver une empreinte du ledger et, s'il existe, du résultat V7 avant V8.
+Cette étape lit les fichiers existants sans les modifier :
+
+```sh
+SCOUT_V8_BEFORE=$(mktemp)
+sha256sum "$HOME/.automaton/scout-workspace/economic-ledger.json" > "$SCOUT_V8_BEFORE"
+if [ -f "$HOME/.automaton/scout-workspace/experiment-result.json" ]; then
+  sha256sum "$HOME/.automaton/scout-workspace/experiment-result.json" >> "$SCOUT_V8_BEFORE"
+fi
+SCOUT_MODE=external node dist/index.js --prepare-webhook-ping
+cat "$HOME/.automaton/scout-workspace/external-action-report.txt"
+```
+
+La préparation crée `external-action.json`, `external-approval-request.json` et
+`external-action-report.txt`, avec état **PRÉPARÉE**, approbation requise et
+aucune exécution. Une préparation répétée réutilise l'action courante tant que
+sa configuration est identique, qu'elle n'est ni refusée ni déjà tentée.
+
+Copier exactement les deux identifiants affichés. Remplacer les valeurs
+d'exemple suivantes : les placeholders ne sont pas des identifiants valides.
+
+```sh
+SCOUT_V8_ACTION_ID='action-UUID_EXACT_AFFICHE'
+SCOUT_V8_REQUEST_ID='request-UUID_EXACT_AFFICHE'
+SCOUT_MODE=external node dist/index.js --preview "$SCOUT_V8_ACTION_ID"
+SCOUT_MODE=approval node dist/index.js --approve-external "$SCOUT_V8_REQUEST_ID"
+SCOUT_MODE=external node dist/index.js --execute "$SCOUT_V8_ACTION_ID" --approval-request-id "$SCOUT_V8_REQUEST_ID" --preview
+```
+
+L'aperçu initial valide les artefacts et montre le payload fixe, le fingerprint
+de destination et la demande exacte. L'approbation V6 crée
+`external-approval.json` et l'état **APPROUVÉE MAIS NON EXÉCUTÉE**, sans réseau.
+L'aperçu d'exécution exige déjà cette approbation et ne consomme pas l'action.
+Une décision de refus utilise, à la place de l'approbation :
+
+```sh
+SCOUT_MODE=approval node dist/index.js --deny-external "$SCOUT_V8_REQUEST_ID"
+```
+
+Les décisions ne sont possibles que sur une demande encore en attente. Pas de
+`latest`, `yes`, wildcard, approval-all, ni approbation implicite. Une approval
+économique `real_spending` ne vaut jamais pour V8 ; une approval `webhook_ping`
+ne vaut ni pour une autre action, ni pour une dépense ou publication.
+
+Après contrôle de votre endpoint et des identifiants, exécuter **une seule fois**
+la commande suivante, qui autorise le POST réel :
+
+```sh
+SCOUT_MODE=external node dist/index.js --execute "$SCOUT_V8_ACTION_ID" --approval-request-id "$SCOUT_V8_REQUEST_ID"
+```
+
+Puis inspecter le journal et vérifier auprès de votre endpoint la réception du
+JSON attendu. Ne pas déduire la réception d'un résultat `uncertain` :
+
+```sh
+SCOUT_MODE=external node dist/index.js --inspect
+cat "$HOME/.automaton/scout-workspace/external-execution.json"
+sha256sum -c "$SCOUT_V8_BEFORE"
+```
+
+Pour vérifier l'anti-rejeu, répéter la même commande d'exécution : elle doit être
+**refusée localement**, sans second POST. Contrôler aussi le compteur côté
+endpoint. V8 ne crée aucune réservation, dépense ou recette et ne modifie ni
+le ledger, ni `experiment-result.json`. L'état économique peut donc rester
+100 EUR initiaux/disponibles, 0 réservé, 0 dépense, 0 revenu, résultat net 0.
+
+### Journal durable et états terminaux
+
+Avant même le DNS, V8 écrit et synchronise une intention `uncertain` avec la
+classe `interrupted`. Elle consomme définitivement cette action. Il revalide
+ensuite l'historique authentifié, les vues et l'URL configurée avant le réseau.
+Les changements de schéma, fingerprint, capability, identifiant, approval ou
+ancrage provoquent un refus. Le résultat conserve version, execution_id,
+action_id, request_id, approval_id, capability, attempted_at, fingerprints,
+status, http_status, response_size, response_sha256 et network_error_class.
+
+| Statut | Sens et suite |
+| --- | --- |
+| `executed` | Réponse HTTP 2xx complète et bornée ; action consommée |
+| `failed` | Échec avant POST, par exemple DNS interdit ; action consommée |
+| `failed-after-send` | Réponse HTTP non 2xx, dont redirection refusée ; action consommée |
+| `uncertain` | POST potentiellement reçu, délai dépassé, réponse incomplète, limite de réponse ou interruption ; action consommée, investigation humaine requise |
+
+**Aucun de ces états ne permet le rejeu de la même action.** Un serveur peut
+avoir reçu le POST malgré une erreur. Aucun retry automatique, même après
+redémarrage. Après `uncertain`, la préparation d'une nouvelle action est elle
+aussi bloquée. V8 initiale ne fournit pas de commande de réarmement : conserver
+les preuves et examiner l'état local et le serveur ; ne pas effacer le journal,
+la clé ou le verrou pour forcer un nouvel essai.
+
+Après un résultat non incertain ou un refus, une nouvelle préparation explicite
+peut créer un nouvel action_id et une nouvelle demande V6, sans réutiliser
+l'ancienne autorisation. Le changement explicite d'URL avant tentative impose
+également une nouvelle préparation et une nouvelle approbation. Les anciennes
+actions restent dans l'historique ; seule l'action courante est exécutable.
+
+### Intégrité et limites
+
+Les fichiers publics sont des vues exactes contrôlées par le runtime. Le rapport
+seul n'autorise jamais l'action. L'historique autoritatif HMAC-SHA256 et sa clé
+locale sont conservés hors du workspace modèle, dans le répertoire privé
+`.scout-external-<hash-du-chemin-workspace>` voisin de celui-ci : 0700 pour le
+répertoire, 0600 pour les fichiers. La clé technique n'est jamais envoyée au
+serveur. Limites : 100 actions et 512 KiB, sans purge automatique.
+
+V8 réutilise les lectures confinées, écritures atomiques avec fsync/rename et
+le verrou partagé V5/V6/V7. Il refuse symlinks, hardlinks et chemins non sûrs.
+Le journal privé est écrit avant les vues ; une interruption entre plusieurs
+fichiers laisse une incohérence détectable qui bloque toute nouvelle action,
+sans réparation automatique. Clé/état manquant, vue altérée ou verrou orphelin :
+arrêt fail-closed. L'outil générique `write_file` refuse les fichiers `external*`
+(y compris les temporaires) ; le confinement interdit l'accès à l'état privé.
+
+Comme V6/V7, le CLI et le compte système hôte appartiennent à la frontière de
+confiance. V8 ne résiste pas à un administrateur contrôlant code/clé, ni à une
+restauration complète d'une ancienne sauvegarde signée. Aucun ancrage matériel
+ou distant anti-rollback n'est ajouté. Sauvegarder ensemble workspace et état
+privé, avec permissions et chemin absolu, sans restaurer un ancien état pour
+relancer une action. La garantie est « au plus une tentative » dans cet état
+local intact, pas une garantie de livraison exactement une fois au serveur.

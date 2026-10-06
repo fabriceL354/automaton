@@ -5,10 +5,11 @@ import { runOpportunityScout, scoutMode } from "./agent/opportunity-scout.js";
 import { runExperimentScout } from "./agent/experiment-runner.js";
 import { runApprovalScout, parseApprovalCommand } from "./agent/approval-gate.js";
 import { runRevenueScout, parseRevenueCommand } from "./agent/revenue-runner.js";
+import { runExternalScout, runExternalApprovalScout, parseExternalCommand } from "./agent/external-gateway.js";
 import { runLedgerScout } from "./agent/ledger-runner.js";
 
-const VERSION = "0.7.0";
-const HELP = `Scout V7 Revenue Loop (local-only) v${VERSION}
+const VERSION = "0.8.0";
+const HELP = `Scout V8 External Action Gateway (local-only) v${VERSION}
 
 Usage:
   automaton --run          Run Scout from ~/.automaton/scout-workspace/MISSION.txt
@@ -17,6 +18,13 @@ Usage:
   automaton --new-request           Explicitly create a fresh pending request (approval mode)
   automaton --record-result <experiment_id> --expense-cents <n> --revenue-cents <n> --outcome <success|partial|failed|cancelled> [--approval-request-id <id>] [--preview]
                           Human-confirmed accounting only (SCOUT_MODE=revenue)
+  automaton --prepare-webhook-ping  Prepare fixed ping, offline (SCOUT_MODE=external)
+  automaton --preview <action_id>   Offline V8 preview
+  automaton --inspect               Verify current V8 state, offline
+  automaton --approve-external <request_id>  Explicit V6 approval (SCOUT_MODE=approval)
+  automaton --deny-external <request_id>     Explicit V6 denial (SCOUT_MODE=approval)
+  automaton --execute <action_id> --approval-request-id <request_id> [--preview]
+                          One HTTPS POST, at most once (SCOUT_MODE=external)
   automaton --version      Show version
   automaton --help         Show this help
 
@@ -33,7 +41,8 @@ Environment:
                           V3.1 caps candidate/detail calls at 128/256
   SCOUT_TIMEOUT_MS        Local inference timeout: 1000–1800000 ms (default: 300000)
   SCOUT_DEBUG_ACTIONS     1 prints rejected raw actions locally (default: 0)
-  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval or revenue; no implicit fallback
+  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue or external; no implicit fallback
+  SCOUT_V8_WEBHOOK_URL     Operator public HTTPS:443 URL; no credentials/query/fragment
   SCOUT_INITIAL_CAPITAL_EUR  Ledger initialization only: 0–10000 EUR, max 2 decimals (default: 100)
   SCOUT_BUDGET_EUR         Positive integer budget for opportunity mode (default: 100, max: 10000)
   SCOUT_EXPERIMENT_BUDGET_EUR  Planning ceiling for experiment mode (default: 10, max: 10, never spent)
@@ -49,6 +58,14 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 0) {
     console.log(HELP);
+    return;
+  }
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && scoutMode() === "external") {
+    await runExternalScout({ command: parseExternalCommand(args), onEvent: message => console.log(message) });
+    return;
+  }
+  if (["--approve-external", "--deny-external"].includes(args[0]) && scoutMode() === "approval") {
+    await runExternalApprovalScout({ args, onEvent: message => console.log(message) });
     return;
   }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && scoutMode() === "revenue") {
@@ -67,7 +84,7 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "-v":
-      console.log(`Scout V7 Revenue Loop (local-only) v${VERSION}`);
+      console.log(`Scout V8 External Action Gateway (local-only) v${VERSION}`);
       return;
     case "--run": {
       const mode = scoutMode();
