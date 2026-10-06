@@ -1771,7 +1771,9 @@ HTTP. Aucune conclusion économique automatique ni apprentissage V11.
 
 ### Procédure Chromebook sans argent réel
 
-**V10 reste à valider matériellement.** Depuis le dépôt intégré sur
+**V10 validée sur Chromebook par l’opérateur au commit `6701f25`**
+(build, 90 tests ciblés, 453 tests de compatibilité et scénario PASS).
+Pour reproduire cette validation, depuis le dépôt intégré sur
 `local-ollama-only` :
 
 ```sh
@@ -1799,3 +1801,285 @@ Résultat attendu : `"result": "PASS"` et
 `"notice": "NO REAL MONEY OR EXTERNAL ACTION IS PERFORMED BY V10"`.
 Les preuves restent dans le dossier temporaire affiché. La simulation ne lance
 aucune expérience réelle et ne modifie aucun état économique de production.
+
+## Scout V11 — Economic Learning Engine
+
+V11 ajoute `SCOUT_MODE=learning`, un moteur **déterministe, local et sans
+Ollama**. Il analyse les confirmations humaines authentifiées de V5/V7/V9
+et les observations V10. Aucun modèle, navigateur, réseau, compte, paiement,
+publication, réservation, approbation, V8, worker ou child agent n'est lancé.
+Aucun plafond V9 n'est changé : 2 projets, 1000 cents/projet, 2000 cents/batch,
+7 jours maximum. V11 n'ajoute ni nouvelle stratégie exécutable, ni modification
+automatique du code, ni V12. Les hypothèses sont uniquement des données.
+
+### Les cinq niveaux du rapport
+
+| Niveau | Contenu | Autorité |
+| --- | --- | --- |
+| FACTS | Dépenses/revenus confirmés, dates de clôture, classification humaine, état d'actif | Rejeu V5 et journaux privés V7/V9 authentifiés |
+| OBSERVATIONS | Views, inquiries, leads, risques, blockers, checkpoints, claims | Journal V10 authentifié ; ce ne sont pas des preuves bancaires |
+| DERIVED METRICS | Net, horizons, ratios, délai du premier revenu enregistré, score | Calculs entiers à partir des faits ci-dessus |
+| HYPOTHESES | Énoncé humain, règle bornée, preuves pour et contre | Mémoire V11 réévaluable et traçable |
+| RECOMMENDATIONS | Suggestion à examiner pour une future expérience | Aucune autorisation, aucune exécution |
+
+Une confirmation humaine authentifiée n'est pas une vérification indépendante
+qu'une vente a réellement eu lieu. Les claims `sale_claim` et `expense_claim`
+ne deviennent jamais des montants financiers. Même réconciliée, une claim
+n'ajoute aucun revenu/dépense : elle pointe vers l'entrée confirmée déjà comptée.
+Une observation V8 existante est vérifiée par V10, sans jamais relancer l'action.
+
+### Deux horizons, et aucune performance manquante inventée
+
+- `experiment_net_cents` = revenu expérimental confirmé − dépense expérimentale
+  confirmée, à la **clôture humaine**. Cette conclusion reste visible ensuite.
+- `lifetime_revenue_cents` = revenu expérimental + reçus passifs confirmés V9.
+- `lifetime_net_cents` = revenu lifetime − dépense expérimentale confirmée.
+  V9 n'a pas de primitive de dépense passive : il s'agit donc du périmètre
+  comptable disponible, pas d'une estimation de coûts externes non enregistrés.
+- `deadline_net_cents` est fourni seulement si la clôture a exactement le même
+  timestamp que la deadline V9. Une clôture tardive ou anticipée ne permet pas
+  d'inventer le résultat exact à J+7. `planned_duration_days` et la durée réelle
+  en millisecondes sont exposées séparément.
+- Sans résultat humain, les montants et résultats sont `null`, avec
+  `pending_result`, jamais un zéro fabriqué. Un résultat confirmé à zéro reste 0.
+- Le premier revenu vient seulement des entrées V5 explicitement reliées au
+  résultat ou aux reçus V9. Le délai utilise `started_at` et le timestamp de
+  **l'enregistrement confirmé**, pas la date commerciale supposée d'une vente.
+  Une claim, même antérieure, ne détermine jamais ce délai. Sans revenu : `null`.
+- Le lifetime est un snapshot des données disponibles, pas un revenu futur ni
+  un résultat définitif tant qu'un actif peut encore produire des recettes.
+
+Les métriques V10 sont des snapshots : 20 puis 45 views donnent 45, pas 65.
+Dernier `effective_at`, puis ordre d'enregistrement en cas d'égalité. Expérience
+et actif passif restent séparés ; une métrique absente reste absente, pas 0.
+Les références d'observation et leurs dates accompagnent chaque métrique.
+Les notes/risques/blockers n'affectent jamais l'arithmétique financière.
+
+Les expériences V7 historiques peuvent être analysées séparément par leur
+identifiant exact. Le lecteur réutilise le MAC V7, les approbations V6 et le
+rejeu V5. V7 n'a pas de lien V9 authentifié vers un projet, un actif ou un début
+d'expérience : ces champs restent `null`, de même que son lifetime et le délai
+écoulé avant revenu. Aucun appariement automatique par nom ou montant.
+
+### Taille d'échantillon, confiance et comparaisons
+
+| Projets/résultats indépendants utilisables | Niveau |
+| --- | --- |
+| 0–1 | `insufficient` |
+| 2–4 | `very_low` |
+| 5–19 | `low` |
+| 20–49 | `moderate` |
+| ≥50 | `strong` |
+
+Ce sont des seuils **descriptifs de quantité de données**, pas une validation
+statistique, une probabilité ni une preuve causale. Avec la limite V9 actuelle
+de deux projets, seuls `insufficient` et `very_low` sont atteignables.
+Des observations répétées, des refreshs et plusieurs revenus d'un même projet
+n'augmentent jamais le nombre de projets indépendants. Une métrique requise
+manquante exclut ce projet de la règle concernée, avec son ID dans
+`missing_project_ids`. Le sample size du rapport concerne les résultats analysés ;
+celui d'une hypothèse concerne ses projets indépendants utilisables.
+
+La comparaison expose les chiffres A/B, leur différence lifetime, les ratios et
+les avertissements : résultats manquants, coûts différents, durées différentes,
+exposition lifetime/états d'actif différents. `winner` reste **toujours null**,
+`generalization` reste `insufficient_evidence`. Même un résultat supérieur
+dans ce scénario ne démontre pas une stratégie rentable en général.
+
+Les ratios `revenue_per_euro_spent`, `net_per_euro_spent` et
+`lifetime_revenue_per_euro_spent` sont des couples entiers
+`{numerator, denominator}` en cents, sans division flottante. Dénominateur nul
+ou donnée manquante : `null`. Ils normalisent le coût, pas les différences de
+marché, durée, effort ou qualité des observations.
+
+### Score explicable et recommandations sans effet
+
+Le score, descriptif uniquement, vaut la somme des composantes suivantes :
+
+| Composante | Valeur |
+| --- | --- |
+| Signe du net expérimental | −2, 0 ou +2 |
+| Signe du net lifetime | −2, 0 ou +2 |
+| Au moins un revenu confirmé | +1 |
+| Au moins un blocker déclaré | −1 |
+| Au moins un risque déclaré | −1 |
+
+Toutes les composantes sont exposées. Un résultat expérimental inconnu donne
+un score `null`. Le score n'est ni un pourcentage ni une probabilité, et ne
+sélectionne pas un gagnant. Les signaux de trafic ne donnent aucun bonus monétaire.
+
+Règles de suggestion, appliquées dans cet ordre : résultat manquant →
+`insufficient_evidence` ; risque/blocker présent → `modify_and_retry` ; nets
+expérimental et lifetime strictement positifs → `repeat_small` ; net
+expérimental non positif mais lifetime positif → `modify_and_retry` ; actif
+passif avec lifetime non positif → `observe_longer` ; lifetime négatif et actif
+non passif → `avoid_for_now` ; sinon → `insufficient_evidence`.
+Chaque suggestion de projet conserve une confiance `insufficient` (un seul
+projet) et `action_authorized: false`. V9/V6 restent les gates pour une future
+expérience, qui doit être demandée et approuvée séparément.
+
+### Hypothèses : règles explicites et contradictions conservées
+
+Deux règles fixes seulement sont disponibles :
+
+- `experiment_profitability` : preuve favorable si le net expérimental confirmé
+  est strictement positif, défavorable sinon. Aucun seuil d'inquiries.
+- `inquiries_lifetime` : l'opérateur donne `--min-inquiries` (1..1000000).
+  On compare « inquiries expérimentales ≥ seuil » à « lifetime confirmé > 0 ».
+  Leur concordance est favorable, leur discordance défavorable. C'est une
+  association descriptive binaire, pas une corrélation statistique ni une
+  causalité ; aucune règle ou extraction sémantique n'est générée depuis le texte.
+
+Le texte humain est une étiquette de l'hypothèse ; seule la règle explicitement
+sélectionnée est testée. La classification V9 `failed` reste une déclaration
+humaine sur l'hypothèse initiale : V11 ne prétend pas démontrer automatiquement
+la fausseté de toute proposition formulée en langage libre.
+
+Statuts : `open` (pas de résultat utilisable), `supported_weakly`,
+`contradicted_weakly`, `mixed`, `retired`. Aucun `proven`.
+Les preuves favorables et défavorables précédentes sont conservées lors d'un
+refresh. Le même projet peut donc figurer des deux côtés après évolution de son
+lifetime, toujours avec un sample size unique. `current_evaluation` distingue
+la lecture actuelle de cette mémoire cumulée. Les événements et snapshots de
+sources permettent de retrouver l'origine de chaque ancienne conclusion.
+
+Le texte, la règle, le seuil et le batch d'une hypothèse sont immuables. Pour
+les modifier, retirer explicitement l'ancienne et créer un nouvel ID.
+Une hypothèse retirée conserve toutes ses preuves et ne peut être réactivée.
+Aucun refresh implicite à la lecture : les vues financières sont recalculées,
+mais la mémoire des hypothèses indique la date de sa dernière évaluation.
+
+### CLI explicite
+
+Utiliser exclusivement des IDs complets existants ; aucun `latest`, `all`,
+`current`, wildcard, ID partiel ou fichier JSON arbitraire. Les commandes
+projet demandent également l'expérience exacte. La comparaison demande deux
+projets distincts ; V9 garantit actuellement une expérience immuable par projet.
+`--list-hypotheses` est une lecture globale explicitement prévue, non mutative.
+
+```sh
+SCOUT_MODE=learning node dist/index.js --analyze-project PROJECT_ID --experiment-id EXPERIMENT_ID
+SCOUT_MODE=learning node dist/index.js --learning-report PROJECT_ID --experiment-id EXPERIMENT_ID
+SCOUT_MODE=learning node dist/index.js --analyze-batch BATCH_ID
+SCOUT_MODE=learning node dist/index.js --compare PROJECT_A_ID PROJECT_B_ID
+SCOUT_MODE=learning node dist/index.js --analyze-experiment LEGACY_V7_EXPERIMENT_ID
+SCOUT_MODE=learning node dist/index.js --list-hypotheses
+SCOUT_MODE=learning node dist/index.js --inspect-hypothesis HYPOTHESIS_ID
+```
+
+Pour une création, générer un UUID v4 local puis conserver cet ID. Exemple de
+préparation d'un identifiant, sans changer de fichier ni appeler un modèle :
+
+```sh
+node --input-type=module -e 'import { randomUUID } from "node:crypto"; console.log("hypothesis-" + randomUUID())'
+```
+
+Reporter sa sortie exacte à la place de `HYPOTHESIS_ID`, et le vrai batch ID :
+
+```sh
+SCOUT_MODE=learning node dist/index.js --create-hypothesis HYPOTHESIS_ID --batch-id BATCH_ID --statement "Des inquiries pourraient être associées à un lifetime positif" --rule inquiries_lifetime --min-inquiries 3 --preview
+SCOUT_MODE=learning node dist/index.js --create-hypothesis HYPOTHESIS_ID --batch-id BATCH_ID --statement "Des inquiries pourraient être associées à un lifetime positif" --rule inquiries_lifetime --min-inquiries 3
+SCOUT_MODE=learning node dist/index.js --refresh-hypothesis HYPOTHESIS_ID --preview
+SCOUT_MODE=learning node dist/index.js --refresh-hypothesis HYPOTHESIS_ID
+SCOUT_MODE=learning node dist/index.js --retire-hypothesis HYPOTHESIS_ID --preview
+SCOUT_MODE=learning node dist/index.js --retire-hypothesis HYPOTHESIS_ID
+```
+
+Toutes les mutations proposent `--preview`, sans journal ni clé persistés.
+Les analyses/rapports sont rendus sur stdout, sans snapshot financier mutable
+écrit sur disque. Les seules écritures V11 persistantes sont le journal privé
+et ses projections `learning-history.json` / `learning-hypotheses.json`.
+La mémoire est toujours reconstruite depuis le journal et ses sources, jamais
+à partir d'une synthèse mutable ou d'une réponse LLM.
+
+### Intégrité, confinement et bornes
+
+Le stockage privé voisin `.scout-learning-<hash-du-workspace>` utilise un MAC
+HMAC-SHA256, une clé locale, un répertoire 0700 et des fichiers 0600. Chaque
+événement conserve les comptes/hash des préfixes V5/V7/V9/V10 utilisés. Ces
+préfixes sont revérifiés lors de la lecture : une source ultérieure peut
+s'allonger sans réécrire une conclusion ancienne. L'événement contient les IDs
+exacts projet/expérience/actif dans ses preuves, et le batch dans sa définition.
+
+Verrou exclusif V5 partagé avec V6–V10 ; jamais de vol/expiration automatique.
+Journal append-only, fichiers temporaires exclusifs, fsync et rename atomique.
+Un échec du premier rename conserve l'état antérieur ; une transaction déjà
+préparée mais incomplète reste bloquée, sans réparation/rejeu silencieux.
+Les vues publiques doivent correspondre exactement au journal ; `write_file`
+ne peut pas les modifier. Liens symboliques/hardlinks, tailles excessives,
+permissions inadéquates, clés absentes et chemins hors confinement sont refusés.
+
+| Borne V11 | Valeur |
+| --- | --- |
+| `MAX_PROJECTS_ANALYZED_PER_RUN` | 2 |
+| `MAX_HYPOTHESES` | 16, hypothèses retirées incluses |
+| `MAX_EVIDENCE_LINKS` | 256 références par unité et 256 liens cumulés dans le journal |
+| `MAX_HISTORY_ENTRIES` | 128 |
+| `MAX_HISTORY_BYTES` | 1 Mio |
+| `MAX_REPORT_BYTES` | 64 Kio, JSON/stdout inclus |
+| Énoncé humain | 500 caractères, sans caractères de contrôle |
+
+Une limite atteinte refuse l'opération ; elle ne supprime ni ne tronque des
+preuves. Les lectures globales restent bornées. Aucun daemon, polling ou calcul
+statistique lourd. Les limites propres aux sources V5/V7/V9/V10 restent actives.
+
+Une source requise absente, corrompue, non authentifiée ou incohérente bloque
+l'analyse. V7/V10 entièrement absents dès le départ signifient explicitement
+« aucune donnée de cette version », sans fabriquer de résultats. Des vues
+orphelines, des entrées financières V7 sans journal ou une source auparavant
+épinglée et maintenant manquante sont refusées. Les incompatibilités entre
+montants/attributions financières authentifiés produisent `DATA_CONFLICT`,
+sans choisir arbitrairement une valeur ni émettre une conclusion.
+Les contrôles cryptographiques peuvent refuser plus tôt un journal invalide.
+
+Le modèle de confiance reste celui des versions précédentes : utilisateur local
+et clés privées de confiance. Il ne protège pas d'un administrateur qui possède
+les clés ou restaure l'intégralité d'un ancien état signé. Aucune source bancaire
+ou vérification externe n'est ajoutée.
+
+### Procédure Chromebook V11 — validation fictive uniquement
+
+V10 est validée matériellement par l'opérateur. **V11 reste à valider sur le
+Chromebook**, indépendamment des tests dans l'environnement de développement.
+Depuis le dépôt intégré sur `local-ollama-only` :
+
+```sh
+git branch --show-current
+git log -1 --oneline
+pnpm build
+pnpm exec vitest run src/__tests__/scout-learning.test.ts
+pnpm exec vitest run src/__tests__/scout-monitoring.test.ts src/__tests__/scout-projects.test.ts src/__tests__/scout-experiment.test.ts src/__tests__/scout-ledger.test.ts src/__tests__/scout-approval.test.ts src/__tests__/scout-revenue.test.ts src/__tests__/scout-external.test.ts
+pnpm exec vitest run src/__tests__/scout-*.test.ts
+node scripts/scout-v11-validation.mjs
+```
+
+Le script crée toujours un nouveau workspace temporaire isolé et utilise les
+vraies primitives locales V5/V9/V10. Il ne lit pas le workspace économique réel.
+Capital fictif 100 EUR, deux réservations fictives de 10 EUR, observations J3,
+clôtures explicites J7, puis reçu passif A à J30. L'horloge simulée avance sans
+attente ni scheduler, uniquement dans le processus de validation.
+
+| Projet | Dépense expérience | Revenu expérience | Net expérience | Revenu après clôture | Net lifetime |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A | 600 cents | 400 cents | −200 cents | 1300 cents | +1100 cents |
+| B | 500 cents | 900 cents | +400 cents | 0 | +400 cents |
+
+A a 45 views / 4 inquiries ; B a 20 views / 2 inquiries. Une claim A de 400
+cents est réconciliée, une claim B de 99999 cents reste exclue des finances.
+Les revenus sont enregistrés à la clôture V9 : le script ne prétend pas
+reconstituer une vente B plus précoce. L'hypothèse inquiries est évaluée avant
+puis après le revenu passif, avec contradictions préservées. Niveau `very_low`,
+aucun gagnant prouvé, `action_authorized: false`, sources inchangées par V11.
+
+Résultat attendu :
+
+```json
+{
+  "result": "PASS",
+  "notice": "V11 LEARNS FROM AUTHENTICATED LOCAL HISTORY ONLY; NO ACTION IS EXECUTED"
+}
+```
+
+Ni argent réel, ni réseau, ni modèle requis. Les fichiers de preuve restent
+dans le dossier temporaire affiché. La sortie ne constitue jamais une
+permission de lancer un projet réel ou de dépenser.

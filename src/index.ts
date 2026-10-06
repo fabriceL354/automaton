@@ -8,10 +8,11 @@ import { runRevenueScout, parseRevenueCommand } from "./agent/revenue-runner.js"
 import { runExternalScout, runExternalApprovalScout, parseExternalCommand } from "./agent/external-gateway.js";
 import { runProjectScout, parseProjectCommand } from "./agent/project-manager.js";
 import { runMonitoringScout, parseMonitoringCommand } from "./agent/experiment-monitor.js";
+import { runLearningScout, parseLearningCommand } from "./agent/economic-learning.js";
 import { runLedgerScout } from "./agent/ledger-runner.js";
 
-const VERSION = "0.10.0";
-const HELP = `Scout V10 Experiment Monitoring (local-only) v${VERSION}
+const VERSION = "0.11.0";
+const HELP = `Scout V11 Economic Learning (local-only) v${VERSION}
 
 Usage:
   automaton --run          Run Scout from ~/.automaton/scout-workspace/MISSION.txt
@@ -53,6 +54,18 @@ Usage:
   V10 typed fields: metrics --metric <enum> --value <n>; claims --amount-cents <n>;
   notes --note <text>; asset status --reported-status <available|unavailable|unknown>;
   external_action_result --execution-id <id>. No free JSON, financial writes or network.
+  V11 (SCOUT_MODE=learning), deterministic, offline, no Ollama:
+  automaton --analyze-project <project_id> --experiment-id <id>
+  automaton --learning-report <project_id> --experiment-id <id>
+  automaton --analyze-batch <batch_id>
+  automaton --analyze-experiment <V7_experiment_id>
+  automaton --compare <project_id_A> <project_id_B>
+  automaton --list-hypotheses
+  automaton --inspect-hypothesis <hypothesis-UUID>
+  automaton --create-hypothesis <hypothesis-UUID> --batch-id <id> --statement <text> --rule <inquiries_lifetime|experiment_profitability> [--min-inquiries <1..1000000>] [--preview]
+  automaton --refresh-hypothesis <hypothesis-UUID> [--preview]
+  automaton --retire-hypothesis <hypothesis-UUID> [--preview]
+  NO ACTION IS AUTHORIZED BY THIS REPORT.
   automaton --version      Show version
   automaton --help         Show this help
 
@@ -69,7 +82,7 @@ Environment:
                           V3.1 caps candidate/detail calls at 128/256
   SCOUT_TIMEOUT_MS        Local inference timeout: 1000–1800000 ms (default: 300000)
   SCOUT_DEBUG_ACTIONS     1 prints rejected raw actions locally (default: 0)
-  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue, external, projects or monitoring; no implicit fallback
+  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue, external, projects, monitoring or learning; no implicit fallback
   SCOUT_V8_WEBHOOK_URL     Operator public HTTPS:443 URL; no credentials/query/fragment
   SCOUT_INITIAL_CAPITAL_EUR  Ledger initialization only: 0–10000 EUR, max 2 decimals (default: 100)
   SCOUT_BUDGET_EUR         Positive integer budget for opportunity mode (default: 100, max: 10000)
@@ -86,6 +99,10 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 0) {
     console.log(HELP);
+    return;
+  }
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && scoutMode() === "learning") {
+    await runLearningScout({ command: parseLearningCommand(args), onEvent: message => console.log(message) });
     return;
   }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && scoutMode() === "monitoring") {
@@ -121,7 +138,7 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "-v":
-      console.log(`Scout V10 Experiment Monitoring (local-only) v${VERSION}`);
+      console.log(`Scout V11 Economic Learning (local-only) v${VERSION}`);
       return;
     case "--run": {
       const mode = scoutMode();

@@ -304,3 +304,17 @@ export async function runRevenueScout(options: { root?: string; command: Revenue
     return { result, preview: false, report: message };
   });
 }
+
+/** V11 read-only adapter. Reuse V7 authentication, V6 binding and V5 replay;
+ * never infer ownership from a public result file or a ledger description. */
+export async function readVerifiedRevenueHistory(root: string, ledger: EconomicLedger) {
+  const { state } = await loadState(root), records = state?.records ?? [];
+  const approvals = await readVerifiedApprovalRecords(root);
+  audit(records, ledger, approvals);
+  await views(root, records, ledger);
+  const owned = new Set(records.flatMap(r => r.result.ledger_entry_ids));
+  if (ledger.entries.some(e => e.human_reference?.startsWith("local-cli:record-result:") && !owned.has(e.id))) {
+    throw new Error("Missing authenticated V7 financial history");
+  }
+  return records;
+}
