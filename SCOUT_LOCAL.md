@@ -1,4 +1,4 @@
-# Scout V9 Multi-Project Real Experiment Manager (inférence locale)
+# Scout V10 Experiment Monitoring & Observation Engine (inférence locale)
 
 Scout utilise Ollama local pour l’inférence et un workspace confiné pour ses
 fichiers. V2 ajoute uniquement des lectures Web publiques HTTPS. Aucun Conway,
@@ -15,7 +15,7 @@ n'ajoute aucun outil réseau au modèle. Voir la procédure V8 en fin de documen
 
 Prérequis : Node.js 20+, pnpm 10.28.1. Les modes local/opportunity/experiment
 nécessitent aussi Ollama lancé localement et un modèle installé. Les modes
-ledger/approval/revenue/projects ne nécessitent ni Ollama, ni mission, ni réseau.
+ledger/approval/revenue/projects/monitoring ne nécessitent ni Ollama, ni mission, ni réseau.
 Le mode external ne nécessite ni Ollama ni mission ; seule son exécution réelle
 ouvre une connexion réseau, après préparation et approbation distinctes.
 
@@ -1523,7 +1523,9 @@ clé ou restaurant l'intégralité d'une ancienne sauvegarde signée.
 
 ### Validation Chromebook SANS argent réel
 
-V9 n'est pas encore validée matériellement. Sur la branche `local-ollama-only`,
+V9 au commit `7a83fe5` a été validée matériellement par l'opérateur : build,
+109 tests V9, 344 tests V4–V8 et scénario fictif PASS. Cette validation ne porte
+pas sur V10. Sur la branche `local-ollama-only`,
 après intégration du bundle :
 
 ```sh
@@ -1549,3 +1551,251 @@ Résultat attendu : `"result": "PASS"`, avec les chemins des preuves temporaires
 et les identifiants. Le dossier reste disponible pour inspection. Aucun vrai
 POST, paiement ou modèle n'est appelé. Une nouvelle exécution du script crée
 une nouvelle fixture isolée, sans réinitialiser le ledger de production.
+
+## Scout V10 — Experiment Monitoring & Observation Engine
+
+**NO REAL MONEY OR EXTERNAL ACTION IS PERFORMED BY V10**
+
+V10 observe. V10 ne dépense pas, ne clôture pas automatiquement, ne transforme
+pas une observation en revenu et ne fait aucun réseau. V10 ne remplace pas V7.
+Il lit les projets V9 authentifiés, le ledger V5 et, uniquement sur demande,
+un résultat V8 déjà enregistré. Aucun modèle, daemon, scheduler, polling,
+paiement, nouvelle capability externe ou moteur d'apprentissage V11.
+Les plafonds V9 restent deux projets, 1000 cents chacun, 2000 cents au total,
+et sept jours maximum par expérience.
+
+### Architecture et autorité
+
+`monitoring-model.ts` définit les catégories, métriques, dates, checkpoints et
+vues déterministes. `experiment-monitor.ts` orchestre les lectures authentifiées,
+les contrôles de projet et les rapprochements. `observation-store.ts` conserve
+le journal signé et ses projections. Tous réutilisent les primitives de lecture
+confinée, écritures atomiques et verrou partagé V5, ainsi que l'audit V9, ses
+identités et ses calculs financiers. V10 n'importe aucun écrivain du ledger ni
+exécuteur V8. L'adaptateur de lecture historique V8 ne nécessite pas d'URL ni de
+résolution DNS.
+
+La définition du projet reste dans V9. Chaque observation fixe le project_id,
+l'experiment_id, l'asset_id éventuel, un event_id runtime `observation-UUID`,
+recorded_at, effective_at, type, source et data strictement typée. Les nombres
+et empreintes des préfixes V9/V5 lus sont également liés à l'événement. Le rejeu
+vérifie le contexte qui existait à son enregistrement : une clôture ultérieure
+ne rend pas les observations antérieures invalides.
+
+### Types et métriques bornés
+
+| Type | Champs CLI obligatoires | Sens |
+| --- | --- | --- |
+| `traffic` | `--metric views\|clicks\|visitors --value N` | Compteur observé |
+| `inquiry` | `--metric inquiries --value N` | Demandes reçues, pas des ventes |
+| `lead` | `--metric leads --value N` | Contacts observés |
+| `conversion_signal` | `--metric orders_claimed --value N` | Commandes annoncées, pas des revenus |
+| `inventory` | `--metric units_remaining --value N` | Stock déclaré |
+| `effort` | `--metric hours_spent_minutes --value N` | Temps observé, en minutes |
+| `sale_claim` | `--amount-cents N` | Revenu allégué, non confirmé financièrement |
+| `expense_claim` | `--amount-cents N` | Dépense alléguée, non confirmée financièrement |
+| `note`, `risk`, `blocker` | `--note 'Texte court'` | Note humaine, jamais interprétée comme commande |
+| `asset_status` | `--reported-status available\|unavailable\|unknown` | État signalé, ne change pas le lifecycle V9 |
+| `external_action_result` | `--execution-id execution-UUID` | Référence à un résultat V8 déjà authentifié |
+
+Les métriques sont des **relevés de valeur**, pas des incréments à additionner.
+Views=20 à J1 puis views=45 à J3 donne 45, jamais 65. La dernière date effective
+l'emporte ; en cas d'égalité, le dernier enregistrement l'emporte. Les métriques
+de l'expérience et de l'actif passif forment deux séries distinctes.
+
+| Borne runtime | Valeur |
+| --- | --- |
+| Événements par expérience, suivi passif et rapprochements compris | 128 |
+| Événements totaux | 256 |
+| Rapprochements totaux | 64 |
+| Note | 500 caractères, sans caractères de contrôle |
+| Métrique | Entier de 0 à 1 000 000 |
+| Claim | Entier de 1 à 1 000 000 cents |
+| Historique / rapport | 1 MiB / 64 KiB |
+| Dates | ISO UTC exact avec millisecondes, années 2000 à 2099 |
+
+Le plafond d'une claim est une limite de stockage d'un signal ; il ne constitue
+jamais un budget autorisé. Les noms de métriques/catégories sont fermés. Floats,
+NaN, Infinity, notation scientifique, nombres négatifs, `-0`, signes `+`, zéros
+ambigus, champs inconnus et doublons CLI sont refusés.
+
+### CLI et preview
+
+Toutes les commandes utilisent `SCOUT_MODE=monitoring`. Le couple exact
+project_id/experiment_id est requis, y compris pour les lectures. Aucun alias
+`latest`, `current`, `all`, wildcard ou sélection du premier projet. Les valeurs
+en majuscules ci-dessous sont des placeholders à remplacer par les IDs V9.
+
+```sh
+SCOUT_MODE=monitoring node dist/index.js --status PROJECT_ID --experiment-id EXPERIMENT_ID
+SCOUT_MODE=monitoring node dist/index.js --timeline PROJECT_ID --experiment-id EXPERIMENT_ID
+SCOUT_MODE=monitoring node dist/index.js --record-observation PROJECT_ID --experiment-id EXPERIMENT_ID --type traffic --metric views --value 20 --preview
+SCOUT_MODE=monitoring node dist/index.js --record-observation PROJECT_ID --experiment-id EXPERIMENT_ID --type traffic --metric views --value 20
+SCOUT_MODE=monitoring node dist/index.js --record-observation PROJECT_ID --experiment-id EXPERIMENT_ID --type inquiry --metric inquiries --value 2
+SCOUT_MODE=monitoring node dist/index.js --record-observation PROJECT_ID --experiment-id EXPERIMENT_ID --type sale_claim --amount-cents 800 --preview
+```
+
+Retirer `--preview` pour enregistrer une observation humaine vérifiée. Cela
+n'enregistre aucun revenu/dépense V5. Toutes les écritures V10 supportent
+`--preview`, y compris checkpoints, observations passives et rapprochements.
+L'aperçu valide et calcule sans créer/modifier historique, clé ou vues. Seul le
+verrou temporaire commun est pris puis libéré. Un event_id d'aperçu est
+hypothétique ; conserver celui renvoyé après enregistrement effectif.
+
+`--status` affiche un rapport humain séparant explicitement
+**CONFIRMED FINANCIAL DATA** et **OBSERVED / UNCONFIRMED SIGNALS**. Les autres
+commandes renvoient du JSON avec l'événement, la timeline ciblée, le statut et
+le rapport. Aucune somme alléguée n'entre dans les totaux financiers confirmés.
+
+### Horloge, checkpoints et alertes
+
+Les dates runtime viennent de l'horloge locale. Seul le code hôte de test peut
+injecter l'horloge ; ni CLI ni variable d'environnement ne permettent de la
+remplacer. `--effective-at 'YYYY-MM-DDTHH:mm:ss.sssZ'` peut préciser la date d'une
+observation passée. Elle ne peut être future, antérieure au démarrage ou hors
+de la fenêtre expérimentale. recorded_at reste la date runtime de saisie.
+Les retours avant les événements V9/V10 ou le ledger déjà lus sont refusés.
+
+Checkpoints disponibles : `start`, `day_1`, `day_3`, `day_5`, `deadline`. Ils sont
+calculés depuis started_at, jamais depuis la première observation. Pour une
+expérience plus courte, seuls les points strictement avant sa deadline sont
+ajoutés, puis la deadline exacte ; aucun doublon ou checkpoint après l'échéance.
+Le checkpoint s'appelle toujours `deadline`, même à J7.
+
+```sh
+SCOUT_MODE=monitoring node dist/index.js --checkpoint PROJECT_ID --experiment-id EXPERIMENT_ID --checkpoint day_1 --preview
+SCOUT_MODE=monitoring node dist/index.js --checkpoint PROJECT_ID --experiment-id EXPERIMENT_ID --checkpoint day_1
+```
+
+Un checkpoint doit être explicitement nommé et déjà dû. Chaque checkpoint ne
+peut être enregistré qu'une fois. Il n'atteste aucune vente, dépense ou réussite.
+L'état temporel calculé est `not_started`, `active`, `checkpoint_due`,
+`deadline_reached` ou `closed`. À la deadline, l'alerte est :
+`DEADLINE_REACHED — HUMAN CLOSE REQUIRED`. Elle ne classe ni ne clôture le test.
+Un checkpoint tardif ou une note rétrospective bornée reste possible tant que
+V9 n'a pas clôturé ; après clôture, utiliser le suivi passif de l'actif.
+
+Alertes locales : `CHECKPOINT_DUE`, `NO_OBSERVATION_YET`, `DEADLINE_REACHED`,
+`PENDING_HUMAN_RESULT`, `ASSET_PASSIVE_MONITORING`, `UNRECONCILED_SALE_CLAIM`,
+`UNRECONCILED_EXPENSE_CLAIM`. Aucune alerte n'est une approval ou un déclencheur.
+
+### Rapprochement financier explicite
+
+Une claim à 800 cents laisse les soldes, revenus/dépenses et lifetime inchangés.
+La confirmation financière doit d'abord être effectuée séparément avec les
+mécanismes existants. Pour les projets V9, les revenus d'expérience entrent au
+ledger à la clôture explicite V9, qui réutilise les primitives financières V5/V7.
+V10 n'ajoute pas de commande de revenu pendant une expérience encore active.
+
+Après confirmation, copier le ledger_entry_id exact associé au résultat ou au
+reçu V9 authentifié et cibler l'observation précise :
+
+```sh
+SCOUT_MODE=monitoring node dist/index.js --reconcile-observation PROJECT_ID --experiment-id EXPERIMENT_ID --observation-id OBSERVATION_ID --ledger-entry-id entry-000006 --preview
+```
+
+Le numéro d'entrée ci-dessus est un exemple ; utiliser l'entrée réelle exacte.
+Retirer `--preview` pour ajouter l'événement de rapprochement. L'observation
+initiale et l'écriture financière restent immuables. La vue dérive ensuite
+`reconciled: true` du nouvel événement signé. Le ledger n'est jamais réécrit.
+
+V10 exige : même projet/expérience, bon type revenue/expense, montant exactement
+égal, écriture confirmée au plus tôt à la date effective de la claim, référence
+appartenant au résultat d'expérience ou au reçu passif approprié. Une entrée
+financière ne peut rapprocher qu'une claim, et une claim qu'une entrée. Pas de
+rapprochement partiel, de plusieurs claims sur une vente globale, ni de sélection
+par montant seul. Un JSON V7 isolé ou une recette globale sans lien V9 authentifié
+ne prouve pas l'appartenance au projet et est refusé. V7 reste inchangé ; ses
+expériences historiques autonomes ne sont pas automatiquement importées en V9.
+
+Le rapprochement d'une ancienne claim reste possible après clôture/retrait de
+l'actif s'il existe une preuve financière compatible ; il ne crée aucune
+nouvelle observation commerciale et ne rouvre rien.
+
+### Actifs passifs et résultats externes
+
+Après clôture V9 avec actif en `passive_monitoring`, fournir son asset_id exact :
+
+```sh
+SCOUT_MODE=monitoring node dist/index.js --asset-observation PROJECT_ID --experiment-id EXPERIMENT_ID --asset-id ASSET_ID --type traffic --metric views --value 60 --preview
+```
+
+Types passifs permis : traffic, inquiry, lead, sale_claim, inventory, note, risk,
+blocker, asset_status. Pas d'expense_claim ni de coût implicite. La date effective
+doit être postérieure ou égale au passage en suivi passif. Une observation
+classique sur l'expérience clôturée est refusée ; un actif retiré ou un projet
+fully_closed sans actif passif refuse toute nouvelle observation. Une claim
+passive se rapproche uniquement d'un revenu passif de cet actif, enregistré
+séparément par V9.
+
+```sh
+SCOUT_MODE=monitoring node dist/index.js --record-observation PROJECT_ID --experiment-id EXPERIMENT_ID --type external_action_result --execution-id EXECUTION_ID --preview
+```
+
+Cette commande lit uniquement un résultat V8 existant et authentifié. L'action
+V8 doit déjà être liée au même projet/expérience dans V9 ; une autre action,
+un résultat absent ou altéré est refusé. Aucune exécution V8, connexion réseau,
+lecture de réponse distante ou interprétation de body. Un résultat ne peut être
+observé qu'une fois. L'empreinte de l'exécution et ses IDs restent liés au journal.
+
+### Intégrité, limites et vues
+
+`monitoring-history.json` et `monitoring-report.txt` sont des projections runtime
+dans le workspace. L'historique autoritatif HMAC-SHA256 et sa clé locale sont
+hors du workspace modèle, dans `.scout-monitoring-<hash-du-chemin-workspace>`,
+répertoire voisin privé 0700, fichiers 0600. Aucune régénération silencieuse
+si une clé/partie de l'état disparaît. Aucune édition ou suppression d'événement,
+aucune purge ni réparation automatique.
+
+Les mutations prennent le même verrou V5–V9, refusent symlinks/hardlinks et
+vérifient les sources avant/après écriture. Le journal authentifié est écrit
+atomiquement en phase prepared, puis les vues, puis la phase complete. Si le
+premier remplacement échoue sur un état déjà établi, l'ancien état reste intact.
+Une interruption ultérieure laisse un état incomplet qui bloque les écritures
+jusqu'à investigation humaine, sans altérer le ledger ou V9. Aucun verrou
+orphelin n'est volé. `write_file` refuse les fichiers `monitoring*` et le
+confinement interdit l'accès au store privé.
+
+Le rapport persisté est un **snapshot daté au dernier append V10**. Sa date et
+ses états peuvent être anciens après une clôture V9 : `--status` recalcule la
+vue actuelle sans réécrire le snapshot. Cela évite une réparation silencieuse
+ou des écritures déclenchées par une simple lecture. La timeline conserve
+l'ordre d'enregistrement ; effective_at permet de reconstruire la chronologie
+observée, y compris les saisies tardives.
+
+L'horloge système, le compte opérateur et le code hôte restent fiables par
+hypothèse, comme V6–V9. La signature ne protège pas d'un administrateur
+contrôlant les clés ou restaurant tout un ancien état signé. V10 ne déduit
+jamais la réalité d'une vente à partir d'une note, d'un compteur ou d'un statut
+HTTP. Aucune conclusion économique automatique ni apprentissage V11.
+
+### Procédure Chromebook sans argent réel
+
+**V10 reste à valider matériellement.** Depuis le dépôt intégré sur
+`local-ollama-only` :
+
+```sh
+git branch --show-current
+git log -1 --oneline
+pnpm build
+pnpm exec vitest run src/__tests__/scout-monitoring.test.ts
+pnpm exec vitest run src/__tests__/scout-projects.test.ts src/__tests__/scout-experiment.test.ts src/__tests__/scout-ledger.test.ts src/__tests__/scout-approval.test.ts src/__tests__/scout-revenue.test.ts src/__tests__/scout-external.test.ts
+pnpm exec vitest run src/__tests__/scout-*.test.ts
+node scripts/scout-v10-validation.mjs
+```
+
+Le script crée un dossier temporaire neuf, jamais le workspace économique réel.
+Capital fictif 100 EUR, A/B à 10 EUR chacun, deux démarrages explicites. L'horloge
+de fixture avance directement à J1 (20 views, 2 inquiries), J3 (45 views,
+4 inquiries, claim 800 cents), puis J7. Il vérifie ledger inchangé par les
+signaux, alerte de deadline et absence de clôture automatique. Pour conserver
+le fonctionnement financier V9 existant, il clôture alors explicitement A avec
+800 cents fictifs de revenu, puis rapproche la claim avec cette entrée exacte.
+Il contrôle l'absence de double revenu et, à J8, le suivi passif de l'actif,
+l'indépendance de B et l'absence de nouvelle réservation/dépense. Aucune attente
+réelle de plusieurs jours et aucun POST dans ce scénario.
+
+Résultat attendu : `"result": "PASS"` et
+`"notice": "NO REAL MONEY OR EXTERNAL ACTION IS PERFORMED BY V10"`.
+Les preuves restent dans le dossier temporaire affiché. La simulation ne lance
+aucune expérience réelle et ne modifie aucun état économique de production.

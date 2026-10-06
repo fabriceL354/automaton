@@ -508,8 +508,8 @@ export async function runOpportunityScout(options: {
 }
 
 /** Explicit mode parsing used by the CLI; no implicit mode or fallback. */
-export function scoutMode(env: Record<string, string | undefined> = process.env): "local" | "opportunity" | "experiment" | "ledger" | "approval" | "revenue" | "external" | "projects" {
+export function scoutMode(env: Record<string, string | undefined> = process.env): "local" | "opportunity" | "experiment" | "ledger" | "approval" | "revenue" | "external" | "projects" | "monitoring" {
   const value = env.SCOUT_MODE ?? "local";
-  if (value !== "local" && value !== "opportunity" && value !== "experiment" && value !== "ledger" && value !== "approval" && value !== "revenue" && value !== "external" && value !== "projects") throw new Error("SCOUT_MODE must be local, opportunity, experiment, ledger, approval, revenue, external or projects");
+  if (value !== "local" && value !== "opportunity" && value !== "experiment" && value !== "ledger" && value !== "approval" && value !== "revenue" && value !== "external" && value !== "projects" && value !== "monitoring") throw new Error("SCOUT_MODE must be local, opportunity, experiment, ledger, approval, revenue, external, projects or monitoring");
   return value;
 }

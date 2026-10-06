@@ -275,3 +275,11 @@ export async function readExternalBinding(root: string): Promise<ActionRecord | 
   if (entry) endpointMatches(entry, configuredEndpoint().fingerprint);
   return entry;
 }
+
+/** Read-only authenticated historical V8 records for V10. No endpoint config,
+ * resolution, transport or execution. Caller holds the shared V5 lock. */
+export async function readVerifiedExternalRecords(root: string): Promise<ActionRecord[]> {
+  const { state } = await load(root);
+  await checkViews(root, state?.records.at(-1));
+  return state?.records ?? [];
+}

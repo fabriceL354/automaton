@@ -7,10 +7,11 @@ import { runApprovalScout, parseApprovalCommand } from "./agent/approval-gate.js
 import { runRevenueScout, parseRevenueCommand } from "./agent/revenue-runner.js";
 import { runExternalScout, runExternalApprovalScout, parseExternalCommand } from "./agent/external-gateway.js";
 import { runProjectScout, parseProjectCommand } from "./agent/project-manager.js";
+import { runMonitoringScout, parseMonitoringCommand } from "./agent/experiment-monitor.js";
 import { runLedgerScout } from "./agent/ledger-runner.js";
 
-const VERSION = "0.9.0";
-const HELP = `Scout V9 Multi-Project Experiment Manager (local-only) v${VERSION}
+const VERSION = "0.10.0";
+const HELP = `Scout V10 Experiment Monitoring (local-only) v${VERSION}
 
 Usage:
   automaton --run          Run Scout from ~/.automaton/scout-workspace/MISSION.txt
@@ -43,6 +44,15 @@ Usage:
   automaton --inspect-project <project_id>
   V8 scoped execute: append --project-id <id> --experiment-id <id> before --preview.
   V9 is local accounting/lifecycle only. NO REAL MONEY IS SPENT BY V9.
+  automaton --status <project_id> --experiment-id <id>      (SCOUT_MODE=monitoring)
+  automaton --timeline <project_id> --experiment-id <id>
+  automaton --record-observation <project_id> --experiment-id <id> --type <enum> <typed fields> [--effective-at <ISO>] [--preview]
+  automaton --asset-observation <project_id> --experiment-id <id> --asset-id <id> --type <enum> <typed fields> [--effective-at <ISO>] [--preview]
+  automaton --checkpoint <project_id> --experiment-id <id> --checkpoint <start|day_1|day_3|day_5|deadline> [--preview]
+  automaton --reconcile-observation <project_id> --experiment-id <id> --observation-id <id> --ledger-entry-id <entry-id> [--preview]
+  V10 typed fields: metrics --metric <enum> --value <n>; claims --amount-cents <n>;
+  notes --note <text>; asset status --reported-status <available|unavailable|unknown>;
+  external_action_result --execution-id <id>. No free JSON, financial writes or network.
   automaton --version      Show version
   automaton --help         Show this help
 
@@ -59,7 +69,7 @@ Environment:
                           V3.1 caps candidate/detail calls at 128/256
   SCOUT_TIMEOUT_MS        Local inference timeout: 1000–1800000 ms (default: 300000)
   SCOUT_DEBUG_ACTIONS     1 prints rejected raw actions locally (default: 0)
-  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue, external or projects; no implicit fallback
+  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue, external, projects or monitoring; no implicit fallback
   SCOUT_V8_WEBHOOK_URL     Operator public HTTPS:443 URL; no credentials/query/fragment
   SCOUT_INITIAL_CAPITAL_EUR  Ledger initialization only: 0–10000 EUR, max 2 decimals (default: 100)
   SCOUT_BUDGET_EUR         Positive integer budget for opportunity mode (default: 100, max: 10000)
@@ -76,6 +86,10 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 0) {
     console.log(HELP);
+    return;
+  }
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && scoutMode() === "monitoring") {
+    await runMonitoringScout({ command: parseMonitoringCommand(args), onEvent: message => console.log(message) });
     return;
   }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) &&
@@ -107,7 +121,7 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "-v":
-      console.log(`Scout V9 Multi-Project Experiment Manager (local-only) v${VERSION}`);
+      console.log(`Scout V10 Experiment Monitoring (local-only) v${VERSION}`);
       return;
     case "--run": {
       const mode = scoutMode();
