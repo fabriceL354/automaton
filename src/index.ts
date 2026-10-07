@@ -12,11 +12,16 @@ import { runLearningScout, parseLearningCommand } from "./agent/economic-learnin
 import { runLedgerScout } from "./agent/ledger-runner.js";
 import { runResearchScout } from "./agent/research-controller.js";
 import { CAPABILITY_REGISTRY } from "./agent/capability-registry.js";
+import { runAllocationScout, parseAllocationCommand } from "./agent/allocation-runner.js";
 
-const VERSION = "0.11.1";
-const HELP = `Scout V11.1 Controlled Research (local-only) v${VERSION}
+const VERSION = "0.12.0";
+const HELP = `Scout V12 Capital Allocator (local-only) v${VERSION}
 
 Usage:
+  SCOUT_MODE=allocation automaton --run [--source research|opportunity]
+  SCOUT_MODE=allocation automaton --calculate-allocation [--source research|opportunity]
+  SCOUT_MODE=allocation automaton --inspect-allocation
+  V12: single durable PROPOSAL_ONLY snapshot, offline, no Ollama. NO REAL MONEY WAS SPENT BY V12.
   SCOUT_MODE=research automaton --run  Public research only; fixed default mission or SCOUT_PUBLIC_RESEARCH_MISSION
   SCOUT_MODE=research automaton --inspect-capabilities  Immutable informational registry, offline
   automaton --run          Run Scout from ~/.automaton/scout-workspace/MISSION.txt
@@ -86,7 +91,7 @@ Environment:
                           V3.1 caps candidate/detail calls at 128/256
   SCOUT_TIMEOUT_MS        Local inference timeout: 1000–1800000 ms (default: 300000)
   SCOUT_DEBUG_ACTIONS     1 prints rejected raw actions locally (default: 0)
-  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue, external, projects, monitoring, learning or research; no implicit fallback
+  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue, external, projects, monitoring, learning, research or allocation; no implicit fallback
   SCOUT_V8_WEBHOOK_URL     Operator public HTTPS:443 URL; no credentials/query/fragment
   SCOUT_INITIAL_CAPITAL_EUR  Ledger initialization only: 0–10000 EUR, max 2 decimals (default: 100)
   SCOUT_BUDGET_EUR         Positive integer budget for opportunity mode (default: 100, max: 10000)
@@ -105,6 +110,10 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 0) {
     console.log(HELP);
+    return;
+  }
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && scoutMode() === "allocation") {
+    await runAllocationScout({ command: parseAllocationCommand(args), onEvent: message => console.log(message) });
     return;
   }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && scoutMode() === "research") {
@@ -152,7 +161,7 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "-v":
-      console.log(`Scout V11.1 Controlled Research (local-only) v${VERSION}`);
+      console.log(`Scout V12 Capital Allocator (local-only) v${VERSION}`);
       return;
     case "--run": {
       const mode = scoutMode();
