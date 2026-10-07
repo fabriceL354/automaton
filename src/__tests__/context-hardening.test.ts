@@ -13,6 +13,7 @@ import {
   estimateTokens,
   truncateToolResult,
   MAX_TOOL_RESULT_SIZE,
+  MAX_EXACT_TOKEN_COUNT_CHARS,
   summarizeTurns,
 } from "../agent/context.js";
 import { DEFAULT_TOKEN_BUDGET } from "../types.js";
@@ -67,6 +68,17 @@ describe("estimateTokens", () => {
   it("handles empty string as zero tokens", () => {
     expect(estimateTokens("")).toBe(0);
   });
+
+  it("uses a conservative bounded estimate for very large inputs", () => {
+    const large = "x".repeat(MAX_EXACT_TOKEN_COUNT_CHARS + 1);
+
+    // The large-input path must not depend on full tokenizer work and must not
+    // underestimate the conservative UTF-8 byte upper bound.
+    expect(estimateTokens(large)).toBe(Buffer.byteLength(large, "utf8"));
+
+    const unicodeHeavy = "😀".repeat(MAX_EXACT_TOKEN_COUNT_CHARS);
+    expect(estimateTokens(unicodeHeavy)).toBe(Buffer.byteLength(unicodeHeavy, "utf8"));
+  });
 });
 
 // ─── truncateToolResult ────────────────────────────────────────
@@ -115,6 +127,14 @@ describe("buildContextMessages token budget", () => {
     // With budget of 50k tokens for recentTurns, 5 such turns should trigger summarization
     const largeTurns = Array.from({ length: 5 }, () => makeLargeTurn(50_000));
     const messages = buildContextMessages("System prompt", largeTurns);
+
+    // Regression: these five large turns must take the structurally bounded
+    // estimator path while still exceeding the context budget.
+    expect(
+      largeTurns.every(
+        (turn) => estimateTokens(turn.thinking) === Buffer.byteLength(turn.thinking, "utf8"),
+      ),
+    ).toBe(true);
 
     // Should have a summary message for old turns
     const summaryMessage = messages.find(

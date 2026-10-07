@@ -25,6 +25,12 @@ let tokenCounter: ReturnType<typeof createTokenCounter> | null = null;
 /** Maximum size for individual tool results in characters */
 export const MAX_TOOL_RESULT_SIZE = 10_000;
 
+/**
+ * Avoid unbounded tokenizer CPU cost on very large synthetic/tool content.
+ * Large inputs use a conservative character bound instead of full tokenization.
+ */
+export const MAX_EXACT_TOKEN_COUNT_CHARS = 10_000;
+
 // Re-export for external use
 export type { TokenBudget };
 export { DEFAULT_TOKEN_BUDGET };
@@ -36,6 +42,17 @@ export { DEFAULT_TOKEN_BUDGET };
 export function estimateTokens(text: string): number {
   const content = text ?? "";
   const legacyEstimate = Math.ceil(content.length / 4);
+
+  // Full cl100k tokenization can become disproportionately expensive on large
+  // inputs (especially long repeated strings). Keep that work structurally
+  // bounded. UTF-8 byte length is a conservative upper bound for BPE token
+  // count, so large content cannot be
+  // under-budgeted by this fast path. A BPE token consumes at least one
+  // UTF-8 byte, so byte length is a safe upper bound on token count.
+  if (content.length > MAX_EXACT_TOKEN_COUNT_CHARS) {
+    return Math.max(Buffer.byteLength(content, "utf8"), legacyEstimate);
+  }
+
   try {
     if (!tokenCounter) {
       tokenCounter = createTokenCounter();
