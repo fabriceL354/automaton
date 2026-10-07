@@ -1,9 +1,12 @@
-# Scout V10 Experiment Monitoring & Observation Engine (inférence locale)
+# Scout V11.1 Controlled Research & Tool Discovery (inférence locale)
 
 Scout utilise Ollama local pour l’inférence et un workspace confiné pour ses
 fichiers. V2 ajoute uniquement des lectures Web publiques HTTPS. Aucun Conway,
 wallet, paiement, compte, authentification, publication, shell accessible au
 modèle, JavaScript exécuté, navigateur interactif ou binaire téléchargé/exécuté.
+V11.1 ajoute Brave (authentification runtime sur endpoint fixe uniquement),
+gzip borné et recherche autonome à intentions publiques contrôlées. Voir la
+procédure V11.1 et ses limites en fin de document.
 Les recherches Web V2 restent exclusivement GET : aucun POST/PUT/PATCH/DELETE,
 formulaire soumis, cookie, jeton, corps de requête ou référent.
 L’API Ollama locale conserve son POST d’inférence ; ce POST ne va jamais au Web.
@@ -2083,3 +2086,311 @@ Résultat attendu :
 Ni argent réel, ni réseau, ni modèle requis. Les fichiers de preuve restent
 dans le dossier temporaire affiché. La sortie ne constitue jamais une
 permission de lancer un projet réel ou de dépenser.
+## Scout V11.1 — Controlled autonomous research & Tool Discovery
+
+**MODEL PROPOSES. RUNTIME VALIDATES. HUMAN AUTHORIZES SENSITIVE ACTIONS.**
+
+V11.1 ajoute uniquement la recherche publique contrôlée. Ce n'est pas V12.
+Aucun projet V9, réservation V5, décision V6, action V8, compte, publication,
+installation, child agent, paiement, wallet, auto-modification ou déploiement
+n'est créé. Les états et limites V4 à V11 restent inchangés. Une proposition
+de recherche, une Tool Request et un Attention Item ne sont jamais des droits.
+
+### Démarrer sur Chromebook
+
+Sur `local-ollama-only`, après import ou pull du commit V11.1 :
+
+```bash
+pnpm build
+pnpm vitest run src/__tests__/scout-research-autonomy.test.ts
+node scripts/scout-v11-1-validation.mjs
+SCOUT_MODE=research node dist/index.js --inspect-capabilities
+```
+
+Le script sans arguments est **offline/mock**, utilise une fausse clé locale
+de fixture et ne consomme aucune API Brave réelle ni inférence Ollama. Il
+crée un workspace temporaire isolé, conserve des fichiers privés fictifs et
+vérifie leur identité après le test. Résultat attendu `PASS`, sinon `BLOCKED`
+avec code de sortie 2. Il vérifie trois tours, six recherches, deux lectures
+gzip, les preuves, une opportunité à 25 EUR avec mini-test gratuit et une
+demande d'outil informative. Rien n'est écrit dans le workspace habituel.
+
+Le mode réel utilise exclusivement Ollama local :
+
+```bash
+export SCOUT_MODE=research
+export SCOUT_MODEL=qwen2.5:1.5b-instruct
+export SCOUT_NUM_CTX=2048
+export SCOUT_NUM_PREDICT=256
+export SCOUT_TIMEOUT_MS=300000
+export SCOUT_SEARCH_PROVIDER=brave
+set +x
+read -r -s -p 'Clé Brave (saisie masquée) : ' BRAVE_SEARCH_API_KEY
+printf '\n'
+export BRAVE_SEARCH_API_KEY
+node dist/index.js --run
+unset BRAVE_SEARCH_API_KEY
+```
+
+Saisir la clé seulement à l'invite masquée, jamais dans une commande, un
+fichier, une capture, une variable de mission ou un prompt. Ne pas utiliser
+`echo`, `env`, `printenv` ou un traçage shell pour inspecter cette variable.
+La commande ci-dessus ne crée ni clé, ni compte, ni abonnement. Les appels
+Brave utilisent le quota externe préexistant de l'opérateur ; Scout ne connaît
+pas sa facturation. `money_spent=false` indique aucune opération de paiement
+ou réservation par Scout, pas une certification du tarif de l'API externe.
+
+La mission par défaut est :
+
+> Trouve en France des expériences économiques réalisables par une seule
+> personne avec un budget initial maximum de 10 EUR. Cherche notamment une
+> piste de revenu rapide et une piste créant un actif numérique durable.
+> Identifie également les outils ou capacités manquants qui pourraient
+> améliorer les résultats.
+
+Une autre mission **explicitement publique** peut être fournie dans
+`SCOUT_PUBLIC_RESEARCH_MISSION`, maximum 1000 caractères. Elle reste dans
+les prompts locaux, n'est jamais copiée comme requête réseau. `MISSION.txt`
+et les requêtes libres `SCOUT_PUBLIC_QUERIES` ne sont pas lus par ce mode.
+Sorties fixes : `~/.automaton/scout-workspace/research.json` et `rapport.txt`,
+avec relecture identique. Les liens/hard links et destinations dangereuses
+sont refusés avant l'inférence. Aucune commande supplémentaire de création
+ou d'action n'est acceptée en mode research.
+
+### Contexte public, propositions et Query Guard
+
+Flux : mission publique → proposition locale → reconstruction runtime →
+Query Guard → provider choisi → résultats vérifiés → lecteur public sécurisé
+→ preuves non fiables → éventuel raffinement → candidats → outils → rapport.
+
+Le contrôleur ne lit jamais le ledger, les approvals, projets, fichiers MAC
+monitoring, historique privé ou fichiers arbitraires. Il ne réutilise aucune
+conversation privée. Chaque appel Ollama contient exactement deux messages
+neufs : contrat de données et contexte public borné. Aucune liste d'outils
+ou autorité d'exécution n'est exposée au modèle.
+
+Pour ce pilote, le modèle propose un **intent court à enums strictes** :
+
+```json
+{"intents":[{"family":"micro_service","focus":"cost","evidence_index":0}]}
+```
+
+Familles : `micro_service`, `digital_template`, `writing`, `translation`,
+`design`, `tutoring`, `spreadsheet`, `guide`. Objectifs : `explore`, `market`,
+`cost`, `validate`. Le runtime construit les mots publics correspondants et
+le pays France. Le modèle peut choisir ses recherches et les raffiner dans
+ce cadre, mais ne peut envoyer aucun texte libre, URL ou fragment de page.
+Ce vocabulaire contrôlé est une limitation volontaire V11.1 ; ce n'est pas
+un moteur universel de navigation ou de recherche hors de ces familles.
+
+Le Query Guard décide ACCEPT/REJECT sans Ollama : vide, longueur >300,
+contrôles/formatage invisible, URL/domaine, IP, chemins locaux, home/workspace,
+marqueurs privés, clés/tokens, bearer, cookies, identifiants, mot de passe,
+carte/CVV, wallet/seed, exfiltration et instructions évidentes sont refusés.
+Le host peut lui fournir des secrets connus, identifiants et copies privées
+pour blocage déterministe, y compris les encodages URL/base64/hex. Ce contexte
+reste runtime-only. La clé Brave est automatiquement protégée. Le contrôleur
+ne charge pas les fichiers privés pour alimenter cette liste : la prévention
+des copies privées inconnues repose surtout sur l'absence d'accès à ces
+fichiers et sur la reconstruction exclusivement à vocabulaire public, pas
+sur une prétendue détection parfaite de tout secret dans du texte libre.
+
+Provenances runtime : `INITIAL_PUBLIC_MISSION`, `MODEL_REFINEMENT`,
+`EVIDENCE_DERIVED`. Une dérivation donne un index de preuve déjà lue, jamais
+une instruction Web directe. Chaque nouvelle intention est reconstruite et
+repasse le guard. Les requêtes identiques sont dédupliquées de façon stable.
+Une proposition refusée n'est ni envoyée, ni reproduite dans les logs/rapports.
+
+### Brave et providers existants
+
+`SCOUT_SEARCH_PROVIDER=brave` lit `BRAVE_SEARCH_API_KEY` exclusivement dans
+le runtime. La clé est conservée dans un champ JavaScript privé et ne se
+sérialise pas. Elle n'entre ni dans le modèle, ni ses prompts, ni les sources,
+les rapports, événements, workspace ou exceptions. Les réponses qui reflètent
+la clé ou ses encodages sont refusées avant leur utilisation. Cette protection
+s'applique aussi aux lectures avec une session Web V2/V3 utilisant Brave.
+
+Endpoint fixe officiel : `https://api.search.brave.com/res/v1/web/search`.
+GET uniquement, header runtime `X-Subscription-Token`, paramètres runtime
+`q`, `count=5`, `country=FR`, `search_lang=fr`, `safesearch=strict`. Aucun endpoint,
+header, token ou paramètre arbitraire n'est sélectionnable par Ollama. DNS
+public vérifié et pinning sont maintenus. **Toutes les redirections Brave
+sont refusées**, même vers le même host. La clé n'accompagne jamais la lecture
+d'une page résultat. Le JSON/MIME, les champs et les URLs HTTPS sont validés,
+avec cinq résultats utilisables maximum par requête.
+
+`none`, `duckduckgo-lite`, `duckduckgo-html`, `searxng` restent compatibles.
+Brave est choisi explicitement : aucun fallback, rotation d'instances ou
+contournement des 202/403/418/429/CAPTCHA/challenges. Un provider indisponible
+donne `BLOCKED`, arrête les recherches et ne fabrique aucune opportunité.
+
+### Gzip sécurisé
+
+`SafeWebClient` accepte `identity` et `gzip` ; les autres encodages, combinaisons
+et gzip corrompus/tronqués sont refusés. Décompression locale par les streams
+`node:zlib`, sans fichier temporaire, shell ou programme externe. Les octets
+compressés sont comptés avant décompression, les octets décompressés à chaque
+chunk de 16 KiB. Les deux budgets globaux et limites par réponse sont durs,
+y compris sur gzip concaténé. Une bombe est coupée dès dépassement, avant
+de retenir le chunk excédentaire dans le buffer final. La comptabilité d'une
+réponse refusée reste consommée. Pas de gros buffer décompressé sans borne.
+
+Le même délai de 15 secondes couvre DNS, socket, redirections, stream et
+décompression. Le délai global research interrompt aussi les clients réseau
+créés par le runtime. HTTPS/443, DNS public, SSRF, DNS pinning, trois redirections
+maximum pour les pages, MIME HTML/plain-text, charset UTF-8/ASCII, taille et
+absence d'auth/cookies/formulaires/POST général sont conservés. Les limites
+V2/V3 restent 1 MiB global et 256 KiB par réponse ; seul le mode research
+utilise les plafonds globaux ci-dessous.
+
+### Recherche multi-passes, coûts et preuves
+
+Tour 1 exploration, tour 2 approfondissement, tour 3 coûts/marché/frais/compte/
+distribution. Au plus deux intentions par tour. Jusqu'à trois pages par
+requête, dix au total ; les sources et URLs finales déjà lues sont dédupliquées.
+Les titres/snippets servent à trouver des pages, pas à créer seuls une
+opportunité. Une page titrée « sous 1000 EUR » peut être lue puis fournir une
+idée concrète gratuite ou moins coûteuse.
+
+L'analyse est découpée en micro-phases adaptées au modèle 1.5B : liste de
+candidats, économie par candidat, preuve par candidat, risques/mini-test par
+candidat, sélection de capacités, fiche par capacité. Une preuve exige un
+extrait littéral de 16–180 caractères dans le texte effectivement lu. Un coût
+`SOURCE_ESTIMATE` exige un montant EUR identique dans l'extrait, ou une mention
+de gratuité pour zéro. Sinon utiliser `ASSUMPTION`, ou `UNKNOWN` avec coût null.
+Les revenus, demande, frais et temps restent à vérifier ; PASS n'est pas une
+preuve de rentabilité. Le classement déterministe pénalise le temps humain,
+les coûts inconnus/hors budget et les coûts hypothétiques.
+
+Budget d'exécution futur dur : 1000 cents par projet, non modifiable ici.
+Horizon de recherche : 10000 cents (100 EUR), qui **n'est pas un capital**.
+Une idée de 18/25/40 EUR peut apparaître `OUT_OF_BUDGET_OPPORTUNITY`, avec
+dépassement, justification, preuve, risques et mini-test possible ou impossible.
+Première question : « Peut-on tester cette opportunité avec ≤10 EUR avant
+d’augmenter le capital ? ». Un mini-test proposé doit lui-même coûter au plus
+1000 cents ; il reste non exécuté. Les idées à coût inconnu sont classées
+`COST_UNCONFIRMED`. Toutes les idées, même à zéro euro, portent
+`execution_authorized=false`, dans un contrat distinct des plans V4/V9.
+
+Pilote futur seulement : A micro-service/revenu rapide, B actif numérique,
+20 EUR total, deux projets à 10 EUR, sept jours, supervision cible ≤15 min/jour.
+À preuve et coût comparables, moins de temps humain est préféré. Le temps
+d'exécution d'une prestation vendue n'est pas garanti par cette estimation.
+
+### Tool Discovery, Capability Registry et Operator Attention
+
+`capability-registry.ts` contient des définitions et opérations profondément
+figées, avec status/risk/origin à enums, accès réseau/credentials/financier et
+nécessité d'approbation explicites. AVAILABLE décrit un module existant, pas
+une permission offerte au mode research : ledger, projets, approvals, gateway,
+monitoring et learning ne sont pas appelés. Le provider Web doit encore être
+configuré. `web_search.credential_access=true` décrit exclusivement l'envoi
+runtime de la clé à Brave, sans accès du modèle. `payment` est UNAVAILABLE /
+forbidden, sans opération autorisée.
+
+Les capacités manquantes proposables couvrent tendances, image, PDF, tableur,
+hosting, analytics, vidéo, traduction, OCR, API spécialisée, email, publication
+marketplace et browser interactif. Leur suggestion ne les installe/active pas.
+Une Tool Request valide contient ID runtime, capacité connue, outil suggéré,
+but, pertinence, nécessaire ou optionnel, compte/credential requis, coût en
+cents ou inconnu, indicateur paid_tool, catégories de données **publiques**,
+risque minimum imposé par le registre, bénéfice attendu et flags d'absence
+de grant/approval. Les noms/prix proposés restent des hypothèses à vérifier.
+Ni credentials, fichiers privés, argent, API supplémentaires ni outils ne
+sont transmis ou utilisés par cette découverte.
+
+Attention Items : INFO, APPROVAL_REQUIRED, HUMAN_INTERVENTION_REQUIRED,
+OUT_OF_BUDGET_OPPORTUNITY, TOOL_REQUEST. Ce sont des données de présentation,
+sans lien vers V6 ni notification push. L'état bloqué produit un item actionnable
+agrégé ; seuls les hors-budget suffisamment intéressants et les outils requis
+peuvent produire une autre synthèse. Les outils optionnels/candidats ordinaires
+restent dans le rapport. Maximum deux items par run, sans timer, polling ou
+envoi mobile ; la future limite quotidienne n'est pas implémentée. INFO et
+suggestions non urgentes ne bloquent pas la recherche ni les projets existants.
+
+### Limites fixes V11.1
+
+| Limite | Valeur |
+| --- | ---: |
+| Tours | 3 |
+| Requêtes sortantes | 6 |
+| Résultats/requête | 5 |
+| Pages tentées | 10 |
+| Candidats | 3 |
+| Tool Requests | 5 |
+| Requête texte | 300 caractères |
+| Octets compressés/run | 4 MiB |
+| Octets décompressés/run | 4 MiB |
+| Chaque réponse, compressée et décompressée | 256 KiB |
+| Texte conservé/page | 2400 caractères |
+| Texte de pages/appel modèle | 4800 caractères maximum |
+| Réponse HTTP Ollama | 16 KiB |
+| Appels modèle | 20 |
+| Tokens générés/appel | min(SCOUT_NUM_PREDICT, 256) |
+| Délai Web/requête | 15 secondes |
+| Délai global research | 20 minutes |
+| Items attention/run | 2 maximum |
+
+Un PASS exige des pages utiles réellement lues, des candidats avec preuve,
+les deux familles du pilote et au moins deux tours avec résultats. Manque de
+preuve, coût/plateforme non confirmés ou réponse de modèle trop tronquée peuvent
+donner INSUFFICIENT_EVIDENCE ; indisponibilité/configuration dangereuse donne
+BLOCKED. La CLI retourne 2 pour les deux statuts incomplets. Pas de faux PASS
+ni réessai infini. Aucun daemon, DB additionnelle, navigateur, gros modèle ou
+LLM cloud. Sur un Chromebook, des sorties JSON à 256 tokens peuvent être
+tronquées : le runtime rejette alors la fiche et conserve les preuves déjà lues.
+
+### Test matériel Brave optionnel
+
+Après saisie masquée de la clé et configuration Ollama ci-dessus :
+
+```bash
+node scripts/scout-v11-1-validation.mjs --brave
+unset BRAVE_SEARCH_API_KEY
+```
+
+**Ne pas mettre `--brave` dans les tests automatisés.** Cette option explicite
+utilise la vraie API choisie et Ollama local, maximum six recherches. Elle
+écrit le rapport dans un nouveau workspace temporaire, pas dans les projets
+actifs. Affiche PASS uniquement si le contrôleur a réellement validé le flux
+sourcé et multi-pass ; sinon BLOCKED avec le statut détaillé, sans inventer
+d'opportunités. `gzip_real_observed` indique honnêtement si une source réelle
+était gzip ; false ne prétend pas qu'une décompression réelle a eu lieu.
+
+Pour vérifier séparément le cas python.org déjà constaté sur le Chromebook,
+utiliser le mode local existant dans un workspace de test isolé avec une mission
+publique et `SCOUT_PUBLIC_URLS='["https://www.python.org/"]'`, provider `none`.
+Cette lecture ne nécessite aucune clé Brave. Une réponse supérieure à 256 KiB,
+un challenge, mauvais charset ou DNS interdit reste refusée, même en gzip.
+
+Vérifications à conserver : query_proposal, query_guard ACCEPT/REJECT,
+web_search completed, read_public_page completed, plusieurs tours, preuves
+avec URLs finales, coûts/incertitudes, éventuelles Tool Requests, états privés
+inchangés, security entièrement false. Aucun test matériel Brave réel n'est
+implicite dans un build ou un PASS de fixture. La validation sur le vrai
+Chromebook doit être effectuée par l'opérateur avant de déclarer V11.1 validée
+matériellement ; la validation matérielle V11 ne suffit pas.
+
+### Bilan de validation de développement V11.1
+
+Environnement de développement : Node 24.19.0, pnpm 10.28.1 via Corepack.
+Ollama et Brave sont simulés ; aucune vraie clé ou API n'est utilisée.
+
+- `pnpm build` : PASS.
+- Suite dédiée `scout-research-autonomy.test.ts` : 228/228 PASS.
+- Compatibilité explicite des 12 suites Scout V1–V11 : 1016/1016 PASS.
+- `node scripts/scout-v11-1-validation.mjs` : PASS offline, trois tours,
+  six recherches simulées, deux sources gzip, deux opportunités sourcées,
+  une Tool Request, aucun état privé modifié.
+- `--brave` sans configuration Brave : BLOCKED, avant toute requête réelle.
+- Suite globale du dépôt : **non validée**. Une tentative diagnostique bornée
+  à 180 secondes a enregistré 2735 assertions réussies et 24 échecs dans
+  l'ancien `loop.test.ts`, puis s'est bloquée. Le test `exec tool runs and is
+  persisted` échoue également au commit V11 de départ : le wrapper local
+  demande une MISSION, contrairement aux anciennes fixtures Conway.
+  `context-hardening.test.ts` atteint également le timeout sur ce commit.
+  `memory.test.ts` plante dans SQLite natif avec Node 24, reproduit sur le
+  commit V11. Ces fichiers historiques n'ont pas été modifiés pour V11.1.
+
+Ce bilan distingue les suites Scout compatibles de tous les tests hérités
+du dépôt Conway. Il ne déclare ni la suite globale ni le vrai Chromebook PASS.

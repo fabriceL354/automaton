@@ -64,6 +64,7 @@ export class WebResearchSession {
     this.searches++;
     try {
       const { results, consultedUrl } = await this.provider.search(query, this.client);
+      if (this.provider.isSensitiveText?.(JSON.stringify({ results, consultedUrl }))) throw new Error("Private search data refused");
       const source = publicHttpsUrl(consultedUrl).href;
       if (!this.client.wasRead(source)) throw new Error("Search provider returned an unverified source");
       const safe = results.slice(0, 5).map(result => ({ title: result.title.slice(0, 200),
@@ -81,6 +82,7 @@ export class WebResearchSession {
       if (this.pages >= WEB_LIMITS.pages) return "ERROR: page limit reached";
       this.pages++;
       const page = await this.client.read(url);
+      if (this.provider.isSensitiveText?.(JSON.stringify(page))) throw new Error("Private page data refused");
       const text = (page.mime === "text/html" ? textFromHtml(page.text) : page.text.trim());
       if (!text || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) return "ERROR: page contains no useful public text";
       this.consulted.add(page.url);

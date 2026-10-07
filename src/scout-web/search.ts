@@ -1,8 +1,47 @@
 import { publicHttpsUrl, SafeWebClient } from "./network.js";
+import { containsKnownPrivate, guardQuery } from "../agent/query-guard.js";
 
 export interface SearchResult { title: string; url: string; snippet: string; }
 export interface SearchProvider {
   search(query: string, client: SafeWebClient): Promise<{ results: SearchResult[]; consultedUrl: string }>;
+  isSensitiveText?(value: string): boolean;
+}
+
+/** Key stays in a JS private field. No arbitrary endpoint, headers or failover. */
+export class BraveSearchProvider implements SearchProvider {
+  #key: string;
+  constructor(key: string | undefined) {
+    if (typeof key !== "string" || !/^[a-zA-Z0-9_.-]{8,256}$/.test(key)) throw new Error("Brave runtime key absent or invalid");
+    this.#key = key;
+    Object.freeze(this);
+  }
+  isSensitiveText(value: string): boolean { return containsKnownPrivate(value, { knownSecrets: [this.#key] }); }
+  async search(query: string, client: SafeWebClient) {
+    try {
+      if (this.isSensitiveText(query) || guardQuery(query, "MODEL_REFINEMENT").decision !== "ACCEPT") throw new Error();
+      const page = await client.readBraveSearch(query, this.#key);
+      if (this.isSensitiveText(page.text)) throw new Error();
+      const data: unknown = JSON.parse(page.text);
+      if (!data || typeof data !== "object" || Array.isArray(data) || "error" in data) throw new Error();
+      const web = (data as Record<string, unknown>).web;
+      if (!web || typeof web !== "object" || Array.isArray(web) || !Array.isArray((web as Record<string, unknown>).results)) throw new Error();
+      const results: SearchResult[] = [];
+      for (const item of (web as { results: unknown[] }).results.slice(0, 50)) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error();
+        const row = item as Record<string, unknown>;
+        if (typeof row.title !== "string" || typeof row.url !== "string" || (row.description !== undefined && typeof row.description !== "string")) throw new Error();
+        try {
+          const url = publicHttpsUrl(row.url).href;
+          const title = textFromHtml(row.title).slice(0, 200);
+          if (!title || results.some(r => r.url === url)) continue;
+          results.push({ title, url, snippet: textFromHtml(row.description as string ?? "").slice(0, 400) });
+        } catch { /* An unsafe result never grants a page-reading capability. */ }
+        if (results.length === 5) break;
+      }
+      if (!results.length || this.isSensitiveText(JSON.stringify(results))) throw new Error();
+      return { results, consultedUrl: page.url };
+    } catch { throw new Error("Brave search unavailable or response refused; no fallback"); }
+  }
 }
 
 export function textFromHtml(html: string): string {
@@ -130,9 +169,10 @@ export function configuredSearchProvider(env: Record<string, string | undefined>
     case "none": return new UnavailableSearchProvider();
     case "duckduckgo-lite": return new DuckDuckGoLiteProvider();
     case "duckduckgo-html": return new DuckDuckGoHtmlProvider();
+    case "brave": return new BraveSearchProvider(env.BRAVE_SEARCH_API_KEY);
     case "searxng":
       if (!env.SCOUT_SEARXNG_URL) throw new Error("SCOUT_SEARXNG_URL is required for searxng");
       return new SearxngProvider(env.SCOUT_SEARXNG_URL);
-    default: throw new Error("SCOUT_SEARCH_PROVIDER must be none, searxng, duckduckgo-lite or duckduckgo-html");
+    default: throw new Error("SCOUT_SEARCH_PROVIDER must be none, brave, searxng, duckduckgo-lite or duckduckgo-html");
   }
 }

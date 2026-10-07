@@ -2,9 +2,15 @@
 import { lookup } from "node:dns/promises";
 import { request } from "node:https";
 import { isIP } from "node:net";
+import { Readable, Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createGunzip } from "node:zlib";
+import { guardQuery, containsKnownPrivate } from "../agent/query-guard.js";
 
 export const WEB_LIMITS = Object.freeze({ searches: 3, pages: 5, bytes: 1024 * 1024,
   responseBytes: 256 * 1024, redirects: 3, timeoutMs: 15_000, textChars: 6000 });
+export const BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+export interface WebByteLimits { bytes: number; responseBytes: number }
 export interface ResolvedAddress { address: string; family: number; }
 export interface HttpReply {
   status: number;
@@ -15,6 +21,8 @@ export interface HttpReply {
 export interface WebTransport {
   resolve(host: string): Promise<ResolvedAddress[]>;
   get(url: URL, address: ResolvedAddress, signal: AbortSignal): Promise<HttpReply>;
+  /** Trusted runtime only; native implementation refuses every other endpoint. */
+  getBrave?(url: URL, address: ResolvedAddress, signal: AbortSignal, key: string): Promise<HttpReply>;
 }
 
 export function publicAddress(address: string): boolean {
@@ -52,12 +60,15 @@ export function publicHttpsUrl(raw: string): URL {
   return url;
 }
 
-export const nativeWebTransport: WebTransport = {
-  resolve: host => lookup(host, { all: true, verbatim: true }),
-  get: (url, pinned, signal) => new Promise((resolve, reject) => {
+function nativeGet(url: URL, pinned: ResolvedAddress, signal: AbortSignal, key?: string): Promise<HttpReply> {
+  if (key !== undefined && (url.origin + url.pathname !== BRAVE_ENDPOINT || url.username || url.password || url.hash)) {
+    return Promise.reject(new Error("Brave endpoint refused"));
+  }
+  return new Promise((resolve, reject) => {
     const req = request(url, {
       method: "GET", agent: false, family: pinned.family, signal, maxHeaderSize: 16 * 1024,
-      headers: { Accept: "text/html, text/plain;q=0.9", "Accept-Encoding": "identity", "User-Agent": "Scout/2.0 (public read-only research)" },
+      headers: { Accept: key === undefined ? "text/html, text/plain;q=0.9" : "application/json", "Accept-Encoding": "identity", "User-Agent": "Scout/2.0 (public read-only research)",
+        ...(key === undefined ? {} : { "X-Subscription-Token": key }) },
       // No second DNS lookup, proxy, credentials, cookies, referer or request body.
       // Explicit family also disables Node's automatic multi-address selection.
       lookup: ((_host: string, _options: unknown, callback: Function) =>
@@ -70,9 +81,14 @@ export const nativeWebTransport: WebTransport = {
       }
       resolve({ status: res.statusCode ?? 0, headers, body: res, close: () => res.destroy() });
     });
-    req.on("error", reject);
+    req.on("error", error => reject(key === undefined ? error : new Error("Brave transport unavailable")));
     req.end();
-  }),
+  });
+}
+export const nativeWebTransport: WebTransport = {
+  resolve: host => lookup(host, { all: true, verbatim: true }),
+  get: (url, pinned, signal) => nativeGet(url, pinned, signal),
+  getBrave: (url, pinned, signal, key) => nativeGet(url, pinned, signal, key),
 };
 
 async function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -86,9 +102,33 @@ async function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise
 
 export class SafeWebClient {
   downloadedBytes = 0;
+  decompressedBytes = 0;
+  gzipReads = 0;
   private readonly completedReads = new Set<string>();
   wasRead(url: string): boolean { return this.completedReads.has(url); }
-  constructor(private readonly transport: WebTransport = nativeWebTransport) {}
+  constructor(private readonly transport: WebTransport = nativeWebTransport, private readonly limits: WebByteLimits = WEB_LIMITS,
+    private readonly runSignal?: AbortSignal) {
+    if (!Number.isSafeInteger(limits.bytes) || limits.bytes < 1 || limits.bytes > 4 * 1024 * 1024 ||
+        !Number.isSafeInteger(limits.responseBytes) || limits.responseBytes < 1 || limits.responseBytes > WEB_LIMITS.responseBytes) throw new Error("Invalid Web byte limits");
+    this.limits = Object.freeze({ ...limits });
+  }
+
+  /** The only credential-bearing Web request. No redirects or operator headers. */
+  async readBraveSearch(query: string, key: string): Promise<{ url: string; mime: string; text: string }> {
+    try {
+      if (typeof key !== "string" || !/^[a-zA-Z0-9_.-]{8,256}$/.test(key) ||
+          guardQuery(query, "MODEL_REFINEMENT", { knownSecrets: [key] }).decision !== "ACCEPT") throw new Error();
+      const endpoint = new URL(BRAVE_ENDPOINT);
+      endpoint.searchParams.set("q", query);
+      endpoint.searchParams.set("count", "5");
+      endpoint.searchParams.set("country", "FR");
+      endpoint.searchParams.set("search_lang", "fr");
+      endpoint.searchParams.set("safesearch", "strict");
+      const page = await this.readResponse(endpoint.href, true, key);
+      if (containsKnownPrivate(page.text, { knownSecrets: [key] })) throw new Error();
+      return page;
+    } catch { throw new Error("Brave search unavailable or response refused; no fallback"); }
+  }
 
   async readSearchJson(raw: string): Promise<{ url: string; mime: string; text: string }> {
     return this.readResponse(raw, true);
@@ -96,10 +136,13 @@ export class SafeWebClient {
   async read(raw: string): Promise<{ url: string; mime: string; text: string }> {
     return this.readResponse(raw, false);
   }
-  private async readResponse(raw: string, searchJson: boolean): Promise<{ url: string; mime: string; text: string }> {
-    if (this.downloadedBytes >= WEB_LIMITS.bytes) throw new Error("Web byte budget exhausted");
+  private async readResponse(raw: string, searchJson: boolean, braveKey?: string): Promise<{ url: string; mime: string; text: string }> {
+    if (this.downloadedBytes >= this.limits.bytes || this.decompressedBytes >= this.limits.bytes) throw new Error("Web byte budget exhausted");
     let url = publicHttpsUrl(raw);
     const controller = new AbortController();
+    this.runSignal?.throwIfAborted();
+    const cancel = () => controller.abort();
+    this.runSignal?.addEventListener("abort", cancel, { once: true });
     const timer = setTimeout(() => controller.abort(), WEB_LIMITS.timeoutMs);
     try {
       for (let hop = 0; hop <= WEB_LIMITS.redirects; hop++) {
@@ -109,9 +152,13 @@ export class SafeWebClient {
           await abortable(this.transport.resolve(host), controller.signal);
         if (!addresses.length || addresses.some(a => !publicAddress(a.address) || isIP(a.address) !== a.family)) throw new Error("DNS resolved to a forbidden address");
         controller.signal.throwIfAborted();
-        const response = await abortable(this.transport.get(url, addresses[0], controller.signal), controller.signal);
+        const pending = braveKey === undefined ? this.transport.get(url, addresses[0], controller.signal) :
+          this.transport.getBrave ? this.transport.getBrave(url, addresses[0], controller.signal, braveKey) : Promise.reject(new Error("Brave transport unavailable"));
+        void pending.then(reply => { if (controller.signal.aborted) reply.close(); }, () => {});
+        const response = await abortable(pending, controller.signal);
         try {
           if ([301, 302, 303, 307, 308].includes(response.status)) {
+            if (braveKey !== undefined) throw new Error("Brave redirect refused");
             if (hop === WEB_LIMITS.redirects || !response.headers.location) throw new Error("Redirect limit or missing location");
             url = publicHttpsUrl(new URL(response.headers.location, url).href);
             continue;
@@ -120,21 +167,41 @@ export class SafeWebClient {
           const mime = response.headers["content-type"]?.split(";")[0].trim().toLowerCase();
           if (!mime || (searchJson ? mime !== "application/json" : mime !== "text/html" && mime !== "text/plain")) throw new Error("Unsupported Web MIME type");
           const encoding = response.headers["content-encoding"];
-          if (encoding && encoding !== "identity") throw new Error("Compressed Web response refused");
+          if (encoding && encoding !== "identity" && encoding !== "gzip") throw new Error("Compressed Web response refused");
           if (/charset\s*=\s*["']?(?!utf-8\b|us-ascii\b)[\w-]+/i.test(response.headers["content-type"] ?? "")) throw new Error("Unsupported charset");
           const length = response.headers["content-length"];
-          if (length && (!/^\d+$/.test(length) || Number(length) > WEB_LIMITS.responseBytes || Number(length) > WEB_LIMITS.bytes - this.downloadedBytes)) throw new Error("Web response too large");
+          if (length && (!/^\d+$/.test(length) || Number(length) > this.limits.responseBytes || Number(length) > this.limits.bytes - this.downloadedBytes)) throw new Error("Web response too large");
           const chunks: Buffer[] = [];
-          let size = 0;
+          let size = 0, decodedSize = 0;
           const iterator = response.body[Symbol.asyncIterator]();
-          while (true) {
-            const next = await abortable(iterator.next(), controller.signal);
-            if (next.done) break;
-            const chunk = Buffer.from(next.value);
-            size += chunk.length;
-            this.downloadedBytes += chunk.length;
-            if (size > WEB_LIMITS.responseBytes || this.downloadedBytes > WEB_LIMITS.bytes) throw new Error("Web byte limit exceeded");
-            chunks.push(chunk);
+          const client = this;
+          async function* boundedBody() {
+            while (true) {
+              const next = await abortable(iterator.next(), controller.signal);
+              if (next.done) break;
+              size += next.value.byteLength;
+              client.downloadedBytes += next.value.byteLength;
+              if (size > client.limits.responseBytes || client.downloadedBytes > client.limits.bytes) throw new Error("Web byte limit exceeded");
+              yield next.value;
+            }
+          }
+          const collect = (chunk: Uint8Array) => {
+            decodedSize += chunk.byteLength;
+            this.decompressedBytes += chunk.byteLength;
+            if (decodedSize > this.limits.responseBytes || this.decompressedBytes > this.limits.bytes) throw new Error("Web decompressed byte limit exceeded");
+            chunks.push(Buffer.from(chunk));
+          };
+          if (encoding === "gzip") {
+            const source = Readable.from(boundedBody(), { objectMode: false, highWaterMark: 16 * 1024 });
+            const gunzip = createGunzip({ chunkSize: 16 * 1024 });
+            const sink = new Writable({ write(chunk, _encoding, callback) {
+              try { collect(chunk); callback(); } catch (error) { callback(error as Error); }
+            } });
+            try { await abortable(pipeline(source, gunzip, sink, { signal: controller.signal }), controller.signal); }
+            catch { throw new Error("Compressed Web response invalid, over limit or timed out"); }
+            this.gzipReads++;
+          } else {
+            for await (const chunk of boundedBody()) collect(chunk);
           }
           const text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
           this.completedReads.add(url.href);
@@ -142,6 +209,6 @@ export class SafeWebClient {
         } finally { response.close(); }
       }
       throw new Error("Redirect limit exceeded");
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); this.runSignal?.removeEventListener("abort", cancel); }
   }
 }

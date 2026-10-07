@@ -10,11 +10,15 @@ import { runProjectScout, parseProjectCommand } from "./agent/project-manager.js
 import { runMonitoringScout, parseMonitoringCommand } from "./agent/experiment-monitor.js";
 import { runLearningScout, parseLearningCommand } from "./agent/economic-learning.js";
 import { runLedgerScout } from "./agent/ledger-runner.js";
+import { runResearchScout } from "./agent/research-controller.js";
+import { CAPABILITY_REGISTRY } from "./agent/capability-registry.js";
 
-const VERSION = "0.11.0";
-const HELP = `Scout V11 Economic Learning (local-only) v${VERSION}
+const VERSION = "0.11.1";
+const HELP = `Scout V11.1 Controlled Research (local-only) v${VERSION}
 
 Usage:
+  SCOUT_MODE=research automaton --run  Public research only; fixed default mission or SCOUT_PUBLIC_RESEARCH_MISSION
+  SCOUT_MODE=research automaton --inspect-capabilities  Immutable informational registry, offline
   automaton --run          Run Scout from ~/.automaton/scout-workspace/MISSION.txt
   automaton --approve <request_id>  Approve one pending request (SCOUT_MODE=approval)
   automaton --deny <request_id>     Deny one pending request (SCOUT_MODE=approval)
@@ -82,14 +86,16 @@ Environment:
                           V3.1 caps candidate/detail calls at 128/256
   SCOUT_TIMEOUT_MS        Local inference timeout: 1000–1800000 ms (default: 300000)
   SCOUT_DEBUG_ACTIONS     1 prints rejected raw actions locally (default: 0)
-  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue, external, projects, monitoring or learning; no implicit fallback
+  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue, external, projects, monitoring, learning or research; no implicit fallback
   SCOUT_V8_WEBHOOK_URL     Operator public HTTPS:443 URL; no credentials/query/fragment
   SCOUT_INITIAL_CAPITAL_EUR  Ledger initialization only: 0–10000 EUR, max 2 decimals (default: 100)
   SCOUT_BUDGET_EUR         Positive integer budget for opportunity mode (default: 100, max: 10000)
   SCOUT_EXPERIMENT_BUDGET_EUR  Planning ceiling for experiment mode (default: 10, max: 10, never spent)
   SCOUT_COUNTRY            Optional operator-supplied country/context (no geolocation)
   SCOUT_CONTEXT            Optional bounded operator context (no automatic lookup)
-  SCOUT_SEARCH_PROVIDER   none (default), searxng, duckduckgo-lite or duckduckgo-html; no automatic fallback
+  SCOUT_SEARCH_PROVIDER   none (default), brave, searxng, duckduckgo-lite or duckduckgo-html; no automatic fallback
+  BRAVE_SEARCH_API_KEY    Runtime-only key for the fixed Brave endpoint; never a mission/prompt
+  SCOUT_PUBLIC_RESEARCH_MISSION  Optional explicitly public mission (research mode only)
   SCOUT_SEARXNG_URL       Public HTTPS origin for explicitly selected SearXNG instance
   SCOUT_PUBLIC_QUERIES    JSON array of up to 3 explicitly public search queries
   SCOUT_PUBLIC_URLS       JSON array of up to 5 approved public HTTPS URLs
@@ -99,6 +105,14 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 0) {
     console.log(HELP);
+    return;
+  }
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && scoutMode() === "research") {
+    if (args.length !== 1) throw new Error("Research accepts exactly --run or --inspect-capabilities");
+    if (args[0] === "--inspect-capabilities") { console.log(JSON.stringify(CAPABILITY_REGISTRY, null, 2)); return; }
+    if (args[0] !== "--run") throw new Error("Research accepts exactly --run or --inspect-capabilities");
+    const output = await runResearchScout({ ...await loadLocalScoutConfig(), onEvent: message => console.log(message) });
+    if (output.status !== "PASS") process.exitCode = 2;
     return;
   }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && scoutMode() === "learning") {
@@ -138,7 +152,7 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "-v":
-      console.log(`Scout V11 Economic Learning (local-only) v${VERSION}`);
+      console.log(`Scout V11.1 Controlled Research (local-only) v${VERSION}`);
       return;
     case "--run": {
       const mode = scoutMode();
