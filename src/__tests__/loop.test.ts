@@ -20,6 +20,18 @@ import {
 } from "./mocks.js";
 import type { AutomatonDatabase, AgentTurn, AgentState } from "../types.js";
 
+const { getUsdcBalanceMock } = vi.hoisted(() => ({
+  getUsdcBalanceMock: vi.fn(async () => 0),
+}));
+
+vi.mock("../conway/x402.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../conway/x402.js")>();
+  return {
+    ...actual,
+    getUsdcBalance: getUsdcBalanceMock,
+  };
+});
+
 const runAgentLoop = (options: AgentLoopOptions) =>
   runAgentLoopImpl({ ...options, testOnlyUseInjectedInference: true });
 
@@ -50,6 +62,10 @@ describe("Agent Loop", () => {
     await runAgentLoop({ identity, config, db, conway, inference });
 
     expect(inference.calls.length).toBeGreaterThan(0);
+    expect(getUsdcBalanceMock).toHaveBeenCalled();
+    expect(
+      fetchSpy.mock.calls.some(([input]) => String(input).includes("/api/chat")),
+    ).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
