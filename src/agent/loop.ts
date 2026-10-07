@@ -86,6 +86,8 @@ export interface AgentLoopOptions {
   onStateChange?: (state: AgentState) => void;
   onTurnComplete?: (turn: AgentTurn) => void;
   ollamaBaseUrl?: string;
+  /** Test harness only: preserve injected inference without entering the local Ollama runtime. */
+  testOnlyUseInjectedInference?: boolean;
 }
 
 /**
@@ -97,8 +99,10 @@ export async function runAgentLoop(
 ): Promise<void> {
   const { identity, config, db, conway, inference, social, skills, policyEngine, spendTracker, onStateChange, onTurnComplete, ollamaBaseUrl } =
     options;
+  const useInjectedTestLoop = options.testOnlyUseInjectedInference === true && process.env.NODE_ENV === "test";
+  const localOllamaOnly = LOCAL_OLLAMA_ONLY && !useInjectedTestLoop;
 
-  if (LOCAL_OLLAMA_ONLY) {
+  if (localOllamaOnly) {
     const { loadLocalScoutConfig, runLocalScout } = await import("./local-runner.js");
     const local = await loadLocalScoutConfig();
     db.setAgentState("running");
@@ -112,8 +116,8 @@ export async function runAgentLoop(
     return;
   }
 
-  const builtinTools = LOCAL_OLLAMA_ONLY ? createLocalWorkspaceTools() : createBuiltinTools(identity.sandboxId);
-  const installedTools = LOCAL_OLLAMA_ONLY ? [] : loadInstalledTools(db);
+  const builtinTools = localOllamaOnly ? createLocalWorkspaceTools() : createBuiltinTools(identity.sandboxId);
+  const installedTools = localOllamaOnly ? [] : loadInstalledTools(db);
   const tools = [...builtinTools, ...installedTools];
   const toolContext: ToolContext = {
     identity,
@@ -145,7 +149,7 @@ export async function runAgentLoop(
   let orchestrator: Orchestrator | undefined;
   let workerPool: LocalWorkerPool | undefined;
 
-  if (!LOCAL_OLLAMA_ONLY && hasTable(db.raw, "goals")) {
+  if (!localOllamaOnly && hasTable(db.raw, "goals")) {
     try {
       planModeController = new PlanModeController(db.raw);
 
@@ -374,7 +378,7 @@ export async function runAgentLoop(
   onStateChange?.("waking");
 
   // Get financial state
-  let financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm");
+  let financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm", localOllamaOnly);
 
   // Check if this is the first run
   const isFirstRun = db.getTurnCount() === 0;
@@ -442,7 +446,7 @@ export async function runAgentLoop(
       }
 
       // Refresh financial state periodically
-      financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm");
+      financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm", localOllamaOnly);
 
       // Check survival tier
       // api_unreachable: creditsCents === -1 means API failed with no cache.
@@ -477,7 +481,7 @@ export async function runAgentLoop(
                 log(config, `[AUTO-TOPUP] Bought $${topupResult.amountUsd} credits from USDC mid-loop`);
                 // Re-fetch financial state after topup so the rest of
                 // the turn sees the updated balance.
-                financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm");
+                financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm", localOllamaOnly);
               }
             } catch (err: any) {
               logger.warn(`Inline auto-topup failed: ${err.message}`);
@@ -964,8 +968,9 @@ async function getFinancialState(
   address: string,
   db?: AutomatonDatabase,
   chainType?: string,
+  localOllamaOnly = LOCAL_OLLAMA_ONLY,
 ): Promise<FinancialState> {
-  if (LOCAL_OLLAMA_ONLY) {
+  if (localOllamaOnly) {
     return {
       creditsCents: 0,
       usdcBalance: 0,

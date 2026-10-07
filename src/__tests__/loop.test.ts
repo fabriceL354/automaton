@@ -5,7 +5,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { runAgentLoop } from "../agent/loop.js";
+import { runAgentLoop as runAgentLoopImpl } from "../agent/loop.js";
+import type { AgentLoopOptions } from "../agent/loop.js";
 import { Orchestrator } from "../orchestration/orchestrator.js";
 import {
   MockInferenceClient,
@@ -18,6 +19,9 @@ import {
   noToolResponse,
 } from "./mocks.js";
 import type { AutomatonDatabase, AgentTurn, AgentState } from "../types.js";
+
+const runAgentLoop = (options: AgentLoopOptions) =>
+  runAgentLoopImpl({ ...options, testOnlyUseInjectedInference: true });
 
 describe("Agent Loop", () => {
   let db: AutomatonDatabase;
@@ -35,6 +39,18 @@ describe("Agent Loop", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     db.close();
+  });
+
+  it("injected inference never falls through to local Ollama or network", async () => {
+    const inference = new MockInferenceClient([noToolResponse("Deterministic.")]);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new Error("Unexpected real network/Ollama access");
+    });
+
+    await runAgentLoop({ identity, config, db, conway, inference });
+
+    expect(inference.calls.length).toBeGreaterThan(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("exec tool runs and is persisted", async () => {
