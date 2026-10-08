@@ -1,3 +1,4 @@
+import { pilotContext } from "./pilot-context.js";
 /** V12.5 loopback-only HTTP boundary. No model, shell, ledger writer or executor. */
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -97,7 +98,7 @@ export async function startControlApi(options: { root?: string; env?: Record<str
     if (project) controlId(project[1], "project");
     if (decision) controlId(decision[1], "request");
     if (req.method === "GET" && (req.headers["transfer-encoding"] !== undefined || (req.headers["content-length"] !== undefined && req.headers["content-length"] !== "0"))) throw new ControlError(400, "UNEXPECTED_BODY", "GET requests must not have a body.");
-    if (pathname === "/v1/health") { respond(res, 200, { schema_version: 1, status: "ok", mode: "local", can_spend: false }); return; }
+    if (pathname === "/v1/health") { respond(res, 200, { schema_version: 1, status: "ok", mode: pilotContext() ? "DRY_RUN_ONLY" : "local", can_spend: false }); return; }
     const authorization = req.headers.authorization;
     if (typeof authorization !== "string" || !/^Bearer [A-Za-z0-9_-]{32,256}$/.test(authorization) || !timingSafeEqual(hash(authorization.slice(7)), expectedToken)) throw new ControlError(401, "UNAUTHORIZED", "Valid local bearer authentication is required.");
     if (decision) await emptyObjectBody(req);

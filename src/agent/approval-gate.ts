@@ -1,3 +1,4 @@
+import { domainNow } from "./pilot-context.js";
 /** V6 local authorization only. No inference, network, tool dispatch or ledger mutation. */
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { constants } from "node:fs";
@@ -280,11 +281,11 @@ async function applyApprovalCommand(root: string, command: ApprovalCommand, onEv
     let entry: RecordEntry;
     if (command.kind === "run" || command.kind === "new-request") {
       if (records.length >= MAX_REQUESTS) throw new Error("Approval history limit reached; human archival required");
-      const base = { version: 6 as const, request_id: `request-${randomUUID()}`, created_at: new Date().toISOString(), ...inputs };
+      const base = { version: 6 as const, request_id: `request-${randomUUID()}`, created_at: domainNow(), ...inputs };
       entry = { request: parseRequest({ ...base, request_fingerprint: fingerprint(base), status: "pending" }), decision: null };
       records.push(entry);
     } else {
-      const r = previous!.request, now = new Date().toISOString();
+      const r = previous!.request, now = domainNow();
       const common = { version: 6 as const, request_id: r.request_id, request_fingerprint: r.request_fingerprint, human_reference: `local-cli:${command.kind}:${r.request_id}` };
       const decision: Approval | Denial = command.kind === "approve" ? {
         version: 6, approval_id: `approval-${randomUUID()}`, request_id: r.request_id, approved_at: now,
@@ -392,7 +393,7 @@ export function parseWebhookAction(value: unknown): WebhookAction {
 function webhookRequestFingerprint(base: Omit<WebhookApprovalRequest, "request_fingerprint" | "status">): string { return digest(JSON.stringify(base)); }
 export function createWebhookApproval(action: WebhookAction): WebhookApprovalRecord {
   const parsed = parseWebhookAction(action);
-  const base = { version: 6 as const, target_version: 8 as const, request_id: `request-${randomUUID()}`, created_at: new Date().toISOString(), action_id: parsed.action_id,
+  const base = { version: 6 as const, target_version: 8 as const, request_id: `request-${randomUUID()}`, created_at: domainNow(), action_id: parsed.action_id,
     action_fingerprint: digest(JSON.stringify(parsed)), requested_capabilities: ["webhook_ping"] as ["webhook_ping"] };
   return { request: { ...base, request_fingerprint: webhookRequestFingerprint(base), status: "pending" }, decision: null };
 }
@@ -426,7 +427,7 @@ export function decideWebhookApproval(action: WebhookAction, record: WebhookAppr
   if (id(requestId, "request") !== current.request.request_id || current.request.status !== "pending") throw new Error("Exact pending external request_id required");
   const status = kind === "approve" ? "approved" : "denied";
   return parseWebhookApproval({ request: { ...current.request, status }, decision: { version: 6, request_id: requestId, action_id: action.action_id,
-    request_fingerprint: current.request.request_fingerprint, decided_at: new Date().toISOString(), approval_id: kind === "approve" ? `approval-${randomUUID()}` : null,
+    request_fingerprint: current.request.request_fingerprint, decided_at: domainNow(), approval_id: kind === "approve" ? `approval-${randomUUID()}` : null,
     approved_capabilities: kind === "approve" ? ["webhook_ping"] : [], human_reference: `local-cli:${kind}-external:${requestId}`, status } }, action);
 }
 

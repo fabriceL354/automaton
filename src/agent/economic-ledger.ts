@@ -1,3 +1,4 @@
+import { domainNow } from "./pilot-context.js";
 /** V5 accounting only. No model, network, payment or tool dispatch. */
 import { createHash } from "node:crypto";
 import {
@@ -195,7 +196,7 @@ function append(ledger: EconomicLedger | undefined, type: EntryType, amount: num
   experiment: ExperimentReference | null, human: string | null): EconomicLedger {
   const entries = ledger ? parseEconomicLedger(JSON.stringify(ledger)).entries : [];
   const payload = { id: `entry-${String(entries.length + 1).padStart(6, "0")}`, type, amount_cents: amount,
-    timestamp: new Date().toISOString(), description, experiment, human_reference: human,
+    timestamp: domainNow(), description, experiment, human_reference: human,
     previous_hash: entries.at(-1)?.hash ?? genesis };
   const next = [...entries, { ...payload, hash: hash(payload) }];
   const result: EconomicLedger = { version: 5, currency: "EUR", ...replay(next), entries: next };

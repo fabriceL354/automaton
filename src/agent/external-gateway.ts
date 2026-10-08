@@ -1,3 +1,5 @@
+import { pilotContext, PILOT_ENDPOINT, domainNow } from "./pilot-context.js";
+import { DryRunExternalTransport } from "./pilot-transport.js";
 /** One-shot V8 gateway. Preparation/V6 approval/preview are entirely offline. */
 import { createHash, createHmac, randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 import { constants } from "node:fs";
@@ -14,7 +16,8 @@ const MAX_BYTES = 512 * 1024, MAX_ACTIONS = 100;
 const ACTION = "external-action.json", REQUEST = "external-approval-request.json", APPROVAL = "external-approval.json";
 const EXECUTION = "external-execution.json", REPORT = "external-action-report.txt";
 const PUBLIC_FILES = [ACTION, REQUEST, APPROVAL, EXECUTION, REPORT];
-export interface ExternalExecution extends PingOutcome {
+export interface ExternalExecution extends Omit<PingOutcome, "status"> {
+  status: PingOutcome["status"] | "simulated";
   version: 8; execution_id: string; action_id: string; request_id: string; approval_id: string;
   capability: "webhook_ping"; attempted_at: string; endpoint_fingerprint: string; payload_fingerprint: string;
 }
@@ -44,7 +47,7 @@ function time(value: unknown): string {
   return value;
 }
 function configuredEndpoint(): { raw: string; fingerprint: string } {
-  const raw = process.env.SCOUT_V8_WEBHOOK_URL;
+  const raw = pilotContext() ? PILOT_ENDPOINT : process.env.SCOUT_V8_WEBHOOK_URL;
   webhookEndpoint(raw); // Pure syntax/IP-literal checks; no DNS during prepare/preview/approval.
   return { raw: raw!, fingerprint: sha(raw!) }; // Bind EXACT operator configuration, including equivalent spellings.
 }
@@ -58,16 +61,17 @@ function parseExecution(value: unknown, action: WebhookAction, approval: Webhook
   if (approval.request.status !== "approved" || approval.decision?.status !== "approved" || d.version !== 8 || d.action_id !== action.action_id ||
     d.request_id !== approval.request.request_id || d.approval_id !== approval.decision.approval_id || d.capability !== "webhook_ping" ||
     d.endpoint_fingerprint !== action.endpoint_fingerprint || d.payload_fingerprint !== action.payload_fingerprint) throw new Error("External execution approval binding mismatch");
+  if (d.status === "simulated" && action.endpoint_fingerprint !== sha(PILOT_ENDPOINT)) throw new Error("Simulation endpoint mismatch");
   const attempted = time(d.attempted_at);
   if (attempted < approval.decision.decided_at) throw new Error("External attempt predates approval");
-  if (d.status !== "executed" && d.status !== "failed" && d.status !== "failed-after-send" && d.status !== "uncertain") throw new Error("Invalid external execution status");
+  if (d.status !== "executed" && d.status !== "failed" && d.status !== "failed-after-send" && d.status !== "uncertain" && d.status !== "simulated") throw new Error("Invalid external execution status");
   if (d.http_status !== null && (typeof d.http_status !== "number" || !Number.isInteger(d.http_status) || d.http_status < 200 || d.http_status > 599)) throw new Error("Invalid HTTP status");
   if (d.response_size !== null && (typeof d.response_size !== "number" || !Number.isSafeInteger(d.response_size) || Object.is(d.response_size, -0) || d.response_size < 0 || d.response_size > WEBHOOK_LIMITS.responseBytes)) throw new Error("Invalid response size");
   if ((d.response_size === null) !== (d.response_sha256 === null)) throw new Error("Incomplete response metadata");
   if (d.response_sha256 !== null) hash(d.response_sha256);
   if (d.network_error_class !== null && (typeof d.network_error_class !== "string" || !WEBHOOK_ERRORS.includes(d.network_error_class as any))) throw new Error("Invalid network error class");
-  if (d.status === "executed" && (d.http_status === null || (d.http_status as number) >= 300 || d.response_size === null || d.network_error_class !== null)) throw new Error("Invalid successful execution");
-  if (d.status !== "executed" && d.network_error_class === null) throw new Error("Missing external failure class");
+  if ((d.status === "executed" || d.status === "simulated") && (d.http_status === null || (d.http_status as number) >= 300 || d.response_size === null || d.network_error_class !== null)) throw new Error("Invalid successful execution");
+  if (d.status !== "executed" && d.status !== "simulated" && d.network_error_class === null) throw new Error("Missing external failure class");
   if (d.status === "failed" && (d.http_status !== null || d.response_size !== null)) throw new Error("Invalid pre-send failure");
   if (d.status === "failed-after-send" && (d.http_status === null || (d.http_status as number) < 300)) throw new Error("Invalid HTTP failure");
   return { version: 8, execution_id: id(d.execution_id, "execution"), action_id: action.action_id, request_id: approval.request.request_id, approval_id: approval.decision.approval_id!,
@@ -112,7 +116,7 @@ async function load(root: string): Promise<{ state?: ExternalState; key?: Buffer
 }
 function report(entry: ActionRecord): string {
   const { action, approval, execution } = entry;
-  const status = execution ? execution.status === "executed" ? "EXÉCUTÉE" : execution.status === "uncertain" ? "INCERTAINE" : "ÉCHEC" :
+  const status = execution ? execution.status === "simulated" ? "ACTION_SIMULATED — DRY_RUN_ONLY" : execution.status === "executed" ? "EXÉCUTÉE" : execution.status === "uncertain" ? "INCERTAINE" : "ÉCHEC" :
     approval.request.status === "approved" ? "APPROUVÉE MAIS NON EXÉCUTÉE" : approval.request.status === "denied" ? "REFUSÉE" : "PRÉPARÉE";
   return ["Scout V8 — action externe préparée", "Action : webhook_ping", `Action ID : ${action.action_id}`, `État : ${status}`,
     `Destination (SHA-256 de la configuration) : ${action.endpoint_fingerprint}`, `Payload SHA-256 : ${action.payload_fingerprint}`,
@@ -192,6 +196,7 @@ function replaceLast(state: ExternalState, entry: ActionRecord): ExternalState {
 export async function runExternalScout(options: { root?: string; command: ExternalCommand; transport?: WebhookTransport; onEvent?: (message: string) => void }): Promise<string> {
   if (scoutMode() !== "external") throw new Error("External gateway requires SCOUT_MODE=external");
   const command = validateCommand(options.command), endpoint = configuredEndpoint(), root = path.resolve(options.root ?? scoutWorkspaceRoot());
+  if (pilotContext() ? root !== pilotContext()!.root || options.transport !== undefined : await readConfined(root, "pilot-dry-run.json", MAX_BYTES).catch(e => { if (e.code === "ENOENT") return undefined; throw e; }) !== undefined) throw new Error("Pilot V8 requires its isolated host and fixed dry-run transport");
   return locked(root, async () => {
     const loaded = await load(root); let state = loaded.state, key = loaded.key; let entry = state?.records.at(-1);
     await checkViews(root, entry);
@@ -200,7 +205,7 @@ export async function runExternalScout(options: { root?: string; command: Extern
       if (!entry || entry.execution || entry.approval.request.status === "denied" || entry.action.endpoint_fingerprint !== endpoint.fingerprint) {
         if ((state?.records.length ?? 0) >= MAX_ACTIONS) throw new Error("External history limit reached");
         const actionId = `action-${randomUUID()}`;
-        const action: WebhookAction = { version: 8, action_id: actionId, type: "webhook_ping", status: "prepared", created_at: new Date().toISOString(),
+        const action: WebhookAction = { version: 8, action_id: actionId, type: "webhook_ping", status: "prepared", created_at: domainNow(),
           endpoint_fingerprint: endpoint.fingerprint, payload_fingerprint: sha(fixedWebhookPayload(actionId)), capabilities: ["webhook_ping"] };
         entry = { action, approval: createWebhookApproval(action), execution: null };
         state = { version: 8, workspace: root, records: [...(state?.records ?? []), entry] };
@@ -225,7 +230,7 @@ export async function runExternalScout(options: { root?: string; command: Extern
           // Durable at-most-once intent BEFORE DNS or a socket. Crash from here
           // on means uncertain; there is no transition back to unattempted.
           const intent: ExternalExecution = { version: 8, execution_id: `execution-${randomUUID()}`, action_id: entry.action.action_id,
-            request_id: entry.approval.request.request_id, approval_id: entry.approval.decision.approval_id!, capability: "webhook_ping", attempted_at: new Date().toISOString(),
+            request_id: entry.approval.request.request_id, approval_id: entry.approval.decision.approval_id!, capability: "webhook_ping", attempted_at: domainNow(),
             endpoint_fingerprint: entry.action.endpoint_fingerprint, payload_fingerprint: entry.action.payload_fingerprint,
             status: "uncertain", http_status: null, response_size: null, response_sha256: null, network_error_class: "interrupted" };
           entry = { ...entry, execution: intent }; state = replaceLast(state, entry);
@@ -235,10 +240,10 @@ export async function runExternalScout(options: { root?: string; command: Extern
           if (!same(reread.state, state)) throw new Error("External intent changed before connection");
           await checkViews(root, entry); endpointMatches(entry, configuredEndpoint().fingerprint);
           await verifyScope();
-          const outcome = await sendWebhookPing(endpoint.raw, entry.action.action_id, options.transport);
+          const outcome = await sendWebhookPing(endpoint.raw, entry.action.action_id, pilotContext() ? new DryRunExternalTransport() : options.transport);
           if (!same((await load(root)).state, state)) throw new Error("External intent changed after network attempt");
           await checkViews(root, entry);
-          entry = { ...entry, execution: { ...intent, ...outcome } }; state = replaceLast(state, entry);
+          entry = { ...entry, execution: { ...intent, ...outcome, status: pilotContext() && outcome.status === "executed" ? "simulated" : outcome.status } }; state = replaceLast(state, entry);
           // If this fails the durable intent still forbids replay. Never retry POST.
           await persist(root, state, key);
         }

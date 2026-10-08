@@ -1,3 +1,4 @@
+import { pilotContext } from "./pilot-context.js";
 /** Local storage boundary for V5. No Ollama or Web calls, even at startup. */
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -57,6 +58,15 @@ export async function atomicWrite(root: string, name: string, content: string, v
 
 /** Exclusive across Scout processes; never steal or auto-expire a stale lock. */
 export async function locked<T>(root: string, operation: () => Promise<T>): Promise<T> {
+  const pilot = pilotContext();
+  if (pilot) {
+    if (root !== pilot.root) throw new Error("Pilot workspace escape");
+    if (pilot.lockHeld) return operation();
+  }
+  if (!pilot) {
+    try { if (await readConfined(root, "pilot-dry-run.json", 256 * 1024) !== undefined) throw new Error("Pilot workspace requires the dry-run host"); }
+    catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; }
+  }
   await safePath(root, LOCK, true);
   const lockPath = path.join(root, LOCK);
   let lock;

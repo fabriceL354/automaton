@@ -1,3 +1,4 @@
+import { pilotContext } from "./pilot-context.js";
 /** Read-only canonical adapters. Caller holds the V5 lock throughout the snapshot. */
 import { readLearningSources } from "./evidence-builder.js";
 import { loadLearningState, checkLearningViews } from "./learning-store.js";
@@ -110,12 +111,12 @@ export async function readControlSnapshot(root: string) {
     external_actions: external.map(r => r.action), external_decisions: external.flatMap(r => r.approval.decision ? [r.approval.decision] : []),
     external_executions: external.flatMap(r => r.execution ? [{ execution_id: r.execution.execution_id, action_id: r.execution.action_id, request_id: r.execution.request_id, attempted_at: r.execution.attempted_at }] : []) };
   const l = financial.ledger, active = projects.filter(p => ["reserved", "approved", "active"].includes(p.status));
-  const summary = { schema_version: 1, scout_version: "12.5", mode: "local", confirmed_available_cents: l.available_balance_cents,
+  const summary = { schema_version: 1, scout_version: pilotContext() ? "12.6" : "12.5", mode: pilotContext() ? "DRY_RUN_ONLY" : "local", confirmed_available_cents: l.available_balance_cents,
     reserved_cents: l.reserved_balance_cents, confirmed_spent_cents: l.total_recorded_expenses_cents,
     confirmed_revenue_cents: l.total_recorded_revenue_cents, active_project_count: active.length, active_project_ids: active.map(p => p.project_id),
     attention_count: attention.length, pending_approval_count: approvals.filter(a => a.status === "pending" && a.current && !a.consumed).length,
     latest_allocation_id: allocation?.allocation_id ?? null, allocation_stale: allocation?.stale ?? null,
-    total_proposed_cents: allocation?.total_proposed_cents ?? null, financial_verification: "LOCAL_LEDGER_NOT_BANK_VERIFICATION",
+    total_proposed_cents: allocation?.total_proposed_cents ?? null, financial_verification: pilotContext() ? "ALL FINANCIAL VALUES IN THIS PILOT ARE SIMULATED" : "LOCAL_LEDGER_NOT_BANK_VERIFICATION",
     api_can_spend: false, api_can_execute: false };
   return { summary, projects, approvals, allocation, attention, projections, histories };
 }

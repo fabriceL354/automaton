@@ -112,6 +112,11 @@ Environment:
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "pilot-dry-run") {
+    try { const { runPilotCli } = await import("./agent/pilot-dry-run.js"); await runPilotCli(args); }
+    catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
+    return;
+  }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "control-api") {
     if (args.length && !(args.length === 1 && args[0] === "--run")) throw new Error("Control API accepts no arguments or --run only");
     try { const { runControlApi } = await import("./agent/control-api.js"); await runControlApi(); }

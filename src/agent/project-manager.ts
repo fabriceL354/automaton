@@ -1,3 +1,4 @@
+import { domainNow } from "./pilot-context.js";
 /** Local V9 orchestration. No inference or network execution. */
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -77,7 +78,7 @@ export async function runProjectScout(options: { root?: string; command: Project
   return locked(root, () => applyProjectCommand(root, c, options.onEvent));
 }
 async function applyProjectCommand(root: string, c: ProjectCommand, onEvent?: (s: string) => void): Promise<string> {
-    const current = await readProjectContext(root), now = new Date().toISOString();
+    const current = await readProjectContext(root), now = domainNow();
     if (current.state?.events.at(-1) && now < current.state.events.at(-1)!.at) throw new Error("Clock moved backwards");
     if (c.operation === "list-projects" || c.operation === "inspect-project") {
       const output = report(current.model, c, now, current.ledger); onEvent?.(output); return output;
@@ -128,11 +129,11 @@ export async function verifyExternalProjectScope(root: string, actionId: string,
     if (scope) throw new Error("No V9 project binding"); return;
   }
   const { model, state } = await readProjectContext(root);
-  if (new Date().toISOString() < state!.events.at(-1)!.at) throw new Error("Clock moved backwards");
+  if (domainNow() < state!.events.at(-1)!.at) throw new Error("Clock moved backwards");
   const links = model.projects.flatMap(p => p.external_actions), link = links.find(a => a.action_id === actionId);
   if (!link) { if (scope) throw new Error("V8 action is not bound to this project"); return; }
   if (!scope || link.project_id !== scope.projectId || link.experiment_id !== scope.experimentId || link.request_id !== requestId ||
     link.action_fingerprint !== actionFingerprint || link.request_fingerprint !== requestFingerprint) throw new Error("Exact V8 project/experiment binding required");
-  const p = findProject(model, scope.projectId, scope.experimentId); requireLive(p, new Date().toISOString());
+  const p = findProject(model, scope.projectId, scope.experimentId); requireLive(p, domainNow());
   if (p.approval?.request.status !== "approved" || p.approval.decision?.status !== "approved") throw new Error("Project approval required for scoped V8 action");
 }
