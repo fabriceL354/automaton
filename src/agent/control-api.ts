@@ -158,9 +158,9 @@ export async function startControlApi(options: { root?: string; env?: Record<str
 }
 export async function runControlApi(): Promise<void> {
   const api = await startControlApi();
-  console.log(`Scout Control API listening on ${api.url} (local only). No spending or execution is possible via this API.`);
   await new Promise<void>(resolve => {
     const stop = () => { void api.close().finally(() => { process.off("SIGINT", stop); process.off("SIGTERM", stop); resolve(); }); };
     process.on("SIGINT", stop); process.on("SIGTERM", stop);
+    console.log(`Scout Control API listening on ${api.url} (local only). No spending or execution is possible via this API.`);
   });
 }
