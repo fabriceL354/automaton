@@ -268,6 +268,21 @@ export async function runExternalApprovalScout(options: { root?: string; args: s
   });
 }
 
+/** Decision-only adapter under the shared V5 lock; never calls transport. */
+export async function decideExistingExternalApproval(root: string, requestId: string, kind: "approve" | "deny"): Promise<void> {
+  if (scoutMode() !== "control-api" || !["approve", "deny"].includes(kind)) throw new Error("Control decision required");
+  id(requestId, "request");
+  const { state, key } = await load(root), entry = state?.records.at(-1);
+  await checkViews(root, entry);
+  if (!entry || !state || !key || entry.approval.request.request_id !== requestId) throw new Error("Exact current external approval required");
+  endpointMatches(entry, configuredEndpoint().fingerprint);
+  if (entry.execution) throw new Error("Consumed external approval");
+  const wanted = kind === "approve" ? "approved" : "denied";
+  if (entry.approval.request.status === wanted) return;
+  const approval = decideWebhookApproval(entry.action, entry.approval, requestId, kind);
+  await persist(root, replaceLast(state, { ...entry, approval }), key);
+}
+
 /** Read-only V9 linkage adapter. Caller must hold the shared V5 lock. */
 export async function readExternalBinding(root: string): Promise<ActionRecord | undefined> {
   const { state } = await load(root), entry = state?.records.at(-1);

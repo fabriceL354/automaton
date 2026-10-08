@@ -22,7 +22,7 @@ function validateCommand(c: AllocationCommand) {
   else if (c.kind === "calculate") { exact(c, ["kind", "input"]); if (!["research.json", "opportunities.json"].includes(c.input)) throw new Error("Fixed allocation source required"); }
   else throw new Error("Explicit allocation command required");
 }
-function verifyPrefixes(state: AllocationState, sources: AllocationSources) {
+export function verifyPrefixes(state: AllocationState, sources: AllocationSources) {
   historicalSources(sources.financial, state.proposal.sources);
   const pins = approvalPins(sources.approvals ?? []);
   if (sources.learning_events.length < state.learning_count || canonicalHash(sources.learning_events.slice(0, state.learning_count)) !== state.learning_prefix_hash ||

@@ -74,11 +74,13 @@ export async function runProjectScout(options: { root?: string; command: Project
   const c = validateProjectCommand(options.command), decision = ["approve-project", "deny-project"].includes(c.operation);
   if (scoutMode() !== (decision ? "approval" : "projects")) throw new Error(decision ? "Project decisions require SCOUT_MODE=approval" : "Project manager requires SCOUT_MODE=projects");
   const root = path.resolve(options.root ?? scoutWorkspaceRoot());
-  return locked(root, async () => {
+  return locked(root, () => applyProjectCommand(root, c, options.onEvent));
+}
+async function applyProjectCommand(root: string, c: ProjectCommand, onEvent?: (s: string) => void): Promise<string> {
     const current = await readProjectContext(root), now = new Date().toISOString();
     if (current.state?.events.at(-1) && now < current.state.events.at(-1)!.at) throw new Error("Clock moved backwards");
     if (c.operation === "list-projects" || c.operation === "inspect-project") {
-      const output = report(current.model, c, now, current.ledger); options.onEvent?.(output); return output;
+      const output = report(current.model, c, now, current.ledger); onEvent?.(output); return output;
     }
     if ((current.state?.events.length ?? 0) >= PROJECT_LIMITS.MAX_EVENTS) throw new Error("Project history event limit");
     const prefix: Partial<Record<ProjectOperation, string>> = { "create-batch": "batch", "create-project": "project", "reserve-project": "request", "approve-project": "approval", "create-asset": "asset" };
@@ -99,9 +101,23 @@ export async function runProjectScout(options: { root?: string; command: Project
       const state: ProjectState = { version: 9, workspace: root, phase: "complete", events };
       await commitProjectState(root, state, current.model, model, current.raw, ledger, current.key);
     }
-    options.onEvent?.(message); return message;
-  });
+    onEvent?.(message); return message;
 }
+
+/** Decision-only host adapter; caller holds the V5 lock. Never reserves/starts. */
+export async function decideExistingProjectApproval(root: string, projectId: string, requestId: string, kind: "approve" | "deny"): Promise<void> {
+  if (scoutMode() !== "control-api" || !["approve", "deny"].includes(kind)) throw new Error("Control decision required");
+  uuid(requestId, "request");
+  const current = await readProjectContext(root), p = findProject(current.model, projectId);
+  if (!p.approval || p.approval.request.request_id !== requestId) throw new Error("Exact project approval required");
+  const wanted = kind === "approve" ? "approved" : "denied";
+  if (p.approval.request.status === wanted && (kind === "approve" ? p.status === "approved" : p.status === "reserved")) return;
+  if (p.approval.request.status !== "pending" || p.status !== "reserved") throw new Error("Incompatible or consumed project approval");
+  const c = validateProjectCommand({ operation: kind === "approve" ? "approve-project" : "deny-project", target: projectId,
+    fields: { "experiment-id": p.experiment_id, "request-id": requestId }, preview: false });
+  await applyProjectCommand(root, c);
+}
+
 /** V8 calls under the shared lock before intent/network. Unscoped V8 remains
  * compatible; a linked action requires both exact IDs and a live V9 approval. */
 export async function verifyExternalProjectScope(root: string, actionId: string, requestId: string, actionFingerprint: string,

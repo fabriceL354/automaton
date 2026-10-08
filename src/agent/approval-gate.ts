@@ -245,7 +245,11 @@ export async function runApprovalScout(options: { root?: string; command?: Appro
   // Validate host arguments too; JS callers cannot smuggle extra properties or IDs.
   obj(supplied, supplied.kind === "approve" || supplied.kind === "deny" ? ["kind", "requestId"] : ["kind"]);
   const command = parseApprovalCommand(supplied.kind === "approve" || supplied.kind === "deny" ? [`--${supplied.kind}`, supplied.requestId] : [`--${supplied.kind}`]);
-  return locked(root, async () => {
+  return locked(root, () => applyApprovalCommand(root, command, options.onEvent));
+}
+
+/** Shared implementation; the caller holds the existing financial lock. */
+async function applyApprovalCommand(root: string, command: ApprovalCommand, onEvent?: (s: string) => void): Promise<ApprovalRequest> {
     const inputs = await readInputs(root);
     const store = approvalStoreRoot(root);
     await safePath(store, STATE, true);
@@ -269,7 +273,7 @@ export async function runApprovalScout(options: { root?: string; command?: Appro
     }
     if (previous && command.kind !== "new-request") ensureCurrent(previous.request, inputs);
     if (previous && command.kind === "run") {
-      options.onEvent?.(`Scout V6: ${previous.request.status}; verified current binding. No execution.`);
+      onEvent?.(`Scout V6: ${previous.request.status}; verified current binding. No execution.`);
       return previous.request;
     }
     const records = state ? [...state.records] : [];
@@ -315,9 +319,22 @@ export async function runApprovalScout(options: { root?: string; command?: Appro
     await saveView(root, REPORT, report(entry));
     ensureCurrent(entry.request, await readInputs(root));
     await views(root, entry);
-    options.onEvent?.(`Scout V6: ${entry.request.status}; ${entry.request.request_id}. Authorization only; no external action or expense.`);
+    onEvent?.(`Scout V6: ${entry.request.status}; ${entry.request.request_id}. Authorization only; no external action or expense.`);
     return entry.request;
-  });
+ }
+
+/** Trusted Control API adapter. Existing V6 parser/bindings/writer, no new request.
+ * Caller holds the shared lock. A matching retry only reads the existing decision. */
+export async function decideExistingApproval(root: string, requestId: string, kind: "approve" | "deny"): Promise<ApprovalRequest> {
+  if (scoutMode() !== "control-api") throw new Error("Control mode required");
+  const command = parseApprovalCommand([`--${kind}`, requestId]);
+  const records = await readVerifiedApprovalRecords(root), current = records?.at(-1);
+  if (!current || current.request.request_id !== requestId) throw new Error("Exact current approval required");
+  await verifyCurrentApprovalBinding(root, current);
+  const wanted = kind === "approve" ? "approved" : "denied";
+  if (current.request.status === wanted) return current.request;
+  if (current.request.status !== "pending") throw new Error("Incompatible approval decision");
+  return applyApprovalCommand(root, command);
 }
 
 /** Read-only trusted-host verification for V7. Caller must hold the shared V5 lock.

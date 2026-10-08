@@ -14,10 +14,11 @@ import { runResearchScout } from "./agent/research-controller.js";
 import { CAPABILITY_REGISTRY } from "./agent/capability-registry.js";
 import { runAllocationScout, parseAllocationCommand } from "./agent/allocation-runner.js";
 
-const VERSION = "0.12.0";
-const HELP = `Scout V12 Capital Allocator (local-only) v${VERSION}
+const VERSION = "0.12.5";
+const HELP = `Scout V12.5 Control API (local-only) v${VERSION}
 
 Usage:
+  SCOUT_MODE=control-api automaton [--run]  Local HTTP control, no Ollama/execution
   SCOUT_MODE=allocation automaton --run [--source research|opportunity]
   SCOUT_MODE=allocation automaton --calculate-allocation [--source research|opportunity]
   SCOUT_MODE=allocation automaton --inspect-allocation
@@ -91,7 +92,10 @@ Environment:
                           V3.1 caps candidate/detail calls at 128/256
   SCOUT_TIMEOUT_MS        Local inference timeout: 1000–1800000 ms (default: 300000)
   SCOUT_DEBUG_ACTIONS     1 prints rejected raw actions locally (default: 0)
-  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue, external, projects, monitoring, learning, research or allocation; no implicit fallback
+  SCOUT_CONTROL_API_TOKEN  Required operator random token, 32..256 URL-safe characters
+  SCOUT_CONTROL_API_HOST   Must be 127.0.0.1 (default)
+  SCOUT_CONTROL_API_PORT   0..65535 (default 4317; 0 selects a free port)
+  SCOUT_MODE               local (default), opportunity, experiment, ledger, approval, revenue, external, projects, monitoring, learning, research, allocation or control-api; no implicit fallback
   SCOUT_V8_WEBHOOK_URL     Operator public HTTPS:443 URL; no credentials/query/fragment
   SCOUT_INITIAL_CAPITAL_EUR  Ledger initialization only: 0–10000 EUR, max 2 decimals (default: 100)
   SCOUT_BUDGET_EUR         Positive integer budget for opportunity mode (default: 100, max: 10000)
@@ -108,6 +112,12 @@ Environment:
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "control-api") {
+    if (args.length && !(args.length === 1 && args[0] === "--run")) throw new Error("Control API accepts no arguments or --run only");
+    try { const { runControlApi } = await import("./agent/control-api.js"); await runControlApi(); }
+    catch { throw new Error("Control API unavailable; verify local configuration and port. No execution performed."); }
+    return;
+  }
   if (args.length === 0) {
     console.log(HELP);
     return;
@@ -161,7 +171,7 @@ async function main(): Promise<void> {
       return;
     case "--version":
     case "-v":
-      console.log(`Scout V12 Capital Allocator (local-only) v${VERSION}`);
+      console.log(`Scout V12.5 Control API (local-only) v${VERSION}`);
       return;
     case "--run": {
       const mode = scoutMode();
