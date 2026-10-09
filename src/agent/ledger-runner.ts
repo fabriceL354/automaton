@@ -3,7 +3,7 @@ import { pilotContext } from "./pilot-context.js";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { safePath, scoutWorkspaceRoot } from "./local-tools.js";
 import { scoutMode } from "./opportunity-scout.js";
 import {
@@ -57,7 +57,11 @@ export async function atomicWrite(root: string, name: string, content: string, v
 }
 
 /** Exclusive across Scout processes; never steal or auto-expire a stale lock. */
-export async function locked<T>(root: string, operation: () => Promise<T>): Promise<T> {
+export async function locked<T>(root: string, operation: () => Promise<T>, preparationScope?: "preparation" | "control-read"): Promise<T> {
+  if (preparationScope && (pilotContext()?.mode ?? process.env.SCOUT_MODE) !== (preparationScope === "preparation" ? "pilot-preparation" : "control-api")) throw new Error("Explicit preparation lock scope required");
+  // V12.7 earmarks share this lock but do not alter V5. Once the preparation
+  // anchor exists, legacy writers cannot commit parallel budgets or actions.
+  // The check belongs INSIDE the acquired lock below to close startup races.
   const pilot = pilotContext();
   if (pilot) {
     if (root !== pilot.root) throw new Error("Pilot workspace escape");
@@ -78,6 +82,11 @@ export async function locked<T>(root: string, operation: () => Promise<T>): Prom
   try {
     await lock.writeFile(JSON.stringify({ pid: process.pid, created_at: new Date().toISOString() }) + "\n");
     await lock.sync();
+    if (!preparationScope) {
+      const store = path.join(path.dirname(root), `.scout-preparation-${createHash("sha256").update(JSON.stringify(root)).digest("hex").slice(0, 32)}`);
+      try { await fs.lstat(store); await safePath(store, "state.json"); throw new Error("Preparation workspace is sealed against legacy writers; human inspection required"); }
+      catch (e) { if (!missing(e)) throw e; }
+    }
     return await operation();
   } finally {
     await lock.close();

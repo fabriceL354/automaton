@@ -2,7 +2,7 @@
 export const CONTROL_LIMITS = Object.freeze({ bodyBytes: 1024, urlBytes: 512, headerBytes: 8192,
   pageSize: 100, defaultPageSize: 50, events: 1024, eventBytes: 1024 * 1024,
   queue: 8, connections: 32, requestMs: 5000, responseBytes: 256 * 1024 });
-export const EVENT_TYPES = ["APPROVAL_REQUIRED", "HUMAN_INTERVENTION_REQUIRED", "OUT_OF_BUDGET_OPPORTUNITY", "TOOL_REQUEST", "PROJECT_UPDATED", "PROJECT_COMPLETED"] as const;
+export const EVENT_TYPES = ["APPROVAL_REQUIRED", "HUMAN_INTERVENTION_REQUIRED", "OUT_OF_BUDGET_OPPORTUNITY", "TOOL_REQUEST", "PROJECT_UPDATED", "PROJECT_COMPLETED", "OPPORTUNITY_READY_FOR_REVIEW", "INSUFFICIENT_BUDGET", "SPENDING_CEILING_EXCEEDED", "MISSING_EVIDENCE", "READY_FOR_MANUAL_LAUNCH", "BLOCKED", "EXPERIMENT_PERIOD_ENDED", "ECONOMIC_RESULT_REVIEW_REQUIRED"] as const;
 export type EventType = typeof EVENT_TYPES[number];
 export const EVENT_MESSAGES: Record<EventType, string> = {
   APPROVAL_REQUIRED: "Review the existing approval request. Authorization does not execute an action.",
@@ -11,6 +11,14 @@ export const EVENT_MESSAGES: Record<EventType, string> = {
   TOOL_REQUEST: "A missing tool was proposed for review. No capability was granted.",
   PROJECT_UPDATED: "The canonical project history records an update.",
   PROJECT_COMPLETED: "The canonical experiment history records completion. See the project for its outcome.",
+  OPPORTUNITY_READY_FOR_REVIEW: "A preparation dossier is ready for human review. No real pilot has started.",
+  INSUFFICIENT_BUDGET: "Bookkeeping availability cannot cover the proposed preparation budget.",
+  SPENDING_CEILING_EXCEEDED: "The proposed expense or exposure exceeds the fixed pilot limits.",
+  MISSING_EVIDENCE: "Evidence is missing. Human verification is required before manual launch.",
+  READY_FOR_MANUAL_LAUNCH: "Review current preparation status before any manual launch. No action is executed.",
+  BLOCKED: "Preparation is blocked. Local operator inspection is required.",
+  EXPERIMENT_PERIOD_ENDED: "A historical experiment reached its deadline. Review its result manually.",
+  ECONOMIC_RESULT_REVIEW_REQUIRED: "Review economic results or unverified declarations; no bank verification is inferred.",
 };
 export interface AttentionDTO {
   attention_id: string; event_type: EventType; subject_type: "approval" | "project" | "research" | "allocation";

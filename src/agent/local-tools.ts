@@ -86,7 +86,7 @@ export function createLocalWorkspaceTools(root = scoutWorkspaceRoot()): Automato
         if (path.resolve(root, args.path) === path.join(root, "MISSION.txt")) return "ERROR: MISSION.txt is read-only";
         // Economic state belongs exclusively to the ledger runtime, including
         // its report, lock and temporary files. No model-accessible write path.
-        if (/^\.?pilot-dry-run(?:[.-]|$)/i.test(path.basename(path.resolve(root, args.path)))) return "ERROR: pilot files are runtime-controlled";
+        if (/^\.?pilot-(?:dry-run|preparation)(?:[.-]|$)/i.test(path.basename(path.resolve(root, args.path)))) return "ERROR: pilot files are runtime-controlled";
         if (/^\.?capital-allocation(?:[.-]|$)/i.test(path.basename(path.resolve(root, args.path)))) {
           return "ERROR: allocation files are runtime-controlled";
         }

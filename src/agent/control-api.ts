@@ -77,7 +77,7 @@ export async function startControlApi(options: { root?: string; env?: Record<str
   const serialized = async <T>(operation: () => Promise<T>): Promise<T> => {
     if (closing || pending >= CONTROL_LIMITS.queue) throw new ControlError(503, "BUSY", "Control API is busy; retry later.");
     pending++;
-    const task = tail.then(() => locked(root, operation));
+    const task = tail.then(() => locked(root, operation, "control-read"));
     tail = task.catch(() => undefined);
     try { return await task; } finally { pending--; }
   };
@@ -87,7 +87,7 @@ export async function startControlApi(options: { root?: string; env?: Record<str
     const decision = /^\/v1\/approvals\/([^/]+)\/(approve|deny)$/.exec(pathname);
     const project = /^\/v1\/projects\/([^/]+)$/.exec(pathname);
     const lists = ["/v1/projects", "/v1/approvals", "/v1/attention"];
-    const knownGet = ["/v1/health", "/v1/summary", "/v1/allocation", "/v1/events", ...lists].includes(pathname) || project !== null;
+    const knownGet = ["/v1/health", "/v1/summary", "/v1/allocation", "/v1/preparation", "/v1/events", ...lists].includes(pathname) || project !== null;
     if (!knownGet && !decision) throw new ControlError(404, "NOT_FOUND", "Route not found.");
     if ((decision && req.method !== "POST") || (!decision && req.method !== "GET")) throw new ControlError(405, "METHOD_NOT_ALLOWED", "Method not allowed.");
     const keys = [...params.keys()], allowed = pathname === "/v1/events" ? ["after", "limit"] : lists.includes(pathname) ? ["offset", "limit"] : [];
@@ -106,6 +106,7 @@ export async function startControlApi(options: { root?: string; env?: Record<str
       let snapshot = await readControlSnapshot(root);
       let events = await syncControlEvents(root, snapshot);
       if (decision) {
+        if (snapshot.preparation) throw new ControlError(409, "PREPARATION_ONLY", "V12.7 decisions require the exact project, action and fingerprint in the local operator CLI.");
         const requestId = decision[1], kind = decision[2] as "approve" | "deny";
         const approval = snapshot.approvals.find(a => a.request_id === requestId);
         if (!approval) throw new ControlError(404, "APPROVAL_NOT_FOUND", "Approval not found.");
@@ -120,6 +121,7 @@ export async function startControlApi(options: { root?: string; env?: Record<str
       }
       if (pathname === "/v1/summary") return snapshot.summary;
       if (pathname === "/v1/allocation") return { schema_version: 1, allocation: snapshot.allocation };
+      if (pathname === "/v1/preparation") return { schema_version: 1, preparation: snapshot.preparation };
       if (project) {
         const found = snapshot.projects.find(p => p.project_id === project[1]);
         if (!found) throw new ControlError(404, "PROJECT_NOT_FOUND", "Project not found.");

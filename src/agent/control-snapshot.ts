@@ -14,6 +14,7 @@ import { canonicalHash, same, structured, exact } from "./project-model.js";
 import { parseToolRequest, buildAttentionItems, type ToolRequest } from "./tool-discovery.js";
 import { RESEARCH_LIMITS } from "./research-model.js";
 import { EVENT_TYPES, type AttentionDTO, type EventProjection } from "./control-model.js";
+import { preparationControlView } from "./pilot-preparation.js";
 
 /** V11.1 output is untrusted information, not authenticated approval evidence.
  * Rebuild its Attention Items from validated research; discard all prose in DTOs. */
@@ -110,14 +111,24 @@ export async function readControlSnapshot(root: string) {
     revenues: financial.revenues, learning: learningEvents, approval_requests: pins.requests, approval_decisions: pins.decisions,
     external_actions: external.map(r => r.action), external_decisions: external.flatMap(r => r.approval.decision ? [r.approval.decision] : []),
     external_executions: external.flatMap(r => r.execution ? [{ execution_id: r.execution.execution_id, action_id: r.execution.action_id, request_id: r.execution.request_id, attempted_at: r.execution.attempted_at }] : []) };
+  const preparation = await preparationControlView(root);
+  if (preparation) {
+    histories.preparation_events = preparation.events;
+    for (const e of preparation.events) {
+      const item: AttentionDTO = { attention_id: e.event_id, event_type: e.event_type, subject_type: "project", subject_id: e.subject_id,
+        source_ref: e.event_id, requires_human_action: e.requires_human_action, authority: "authenticated_state" };
+      attention.push(item); projections.push({ ...item, created_at: e.created_at });
+    }
+  }
   const l = financial.ledger, active = projects.filter(p => ["reserved", "approved", "active"].includes(p.status));
-  const summary = { schema_version: 1, scout_version: pilotContext() ? "12.6" : "12.5", mode: pilotContext() ? "DRY_RUN_ONLY" : "local", confirmed_available_cents: l.available_balance_cents,
+  const summary = { schema_version: 1, scout_version: pilotContext() ? "12.6" : preparation ? "12.7" : "12.5", mode: pilotContext() ? "DRY_RUN_ONLY" : preparation ? "PREPARATION_ONLY" : "local", confirmed_available_cents: l.available_balance_cents,
     reserved_cents: l.reserved_balance_cents, confirmed_spent_cents: l.total_recorded_expenses_cents,
     confirmed_revenue_cents: l.total_recorded_revenue_cents, active_project_count: active.length, active_project_ids: active.map(p => p.project_id),
     attention_count: attention.length, pending_approval_count: approvals.filter(a => a.status === "pending" && a.current && !a.consumed).length,
     latest_allocation_id: allocation?.allocation_id ?? null, allocation_stale: allocation?.stale ?? null,
     total_proposed_cents: allocation?.total_proposed_cents ?? null, financial_verification: pilotContext() ? "ALL FINANCIAL VALUES IN THIS PILOT ARE SIMULATED" : "LOCAL_LEDGER_NOT_BANK_VERIFICATION",
+    ...(preparation ? { prepared_project_count: preparation.projects.length, preparation_reserved_cents: preparation.total_reserved_cents, reference_capital_cents: 10000 } : {}),
     api_can_spend: false, api_can_execute: false };
-  return { summary, projects, approvals, allocation, attention, projections, histories };
+  return { summary, projects, approvals, allocation, preparation, attention, projections, histories };
 }
 export type ControlSnapshot = Awaited<ReturnType<typeof readControlSnapshot>>;

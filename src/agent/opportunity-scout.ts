@@ -509,8 +509,8 @@ export async function runOpportunityScout(options: {
 }
 
 /** Explicit mode parsing used by the CLI; no implicit mode or fallback. */
-export function scoutMode(env: Record<string, string | undefined> = process.env): "local" | "opportunity" | "experiment" | "ledger" | "approval" | "revenue" | "external" | "projects" | "monitoring" | "learning" | "research" | "allocation" | "control-api" | "pilot-dry-run" {
+export function scoutMode(env: Record<string, string | undefined> = process.env): "local" | "opportunity" | "experiment" | "ledger" | "approval" | "revenue" | "external" | "projects" | "monitoring" | "learning" | "research" | "allocation" | "control-api" | "pilot-dry-run" | "pilot-preparation" {
   const value = (env === process.env ? pilotContext()?.mode : undefined) ?? env.SCOUT_MODE ?? "local";
-  if (value !== "local" && value !== "opportunity" && value !== "experiment" && value !== "ledger" && value !== "approval" && value !== "revenue" && value !== "external" && value !== "projects" && value !== "monitoring" && value !== "learning" && value !== "research" && value !== "allocation" && value !== "control-api" && value !== "pilot-dry-run") throw new Error("SCOUT_MODE must be local, opportunity, experiment, ledger, approval, revenue, external, projects, monitoring, learning, research, allocation or control-api");
+  if (value !== "local" && value !== "opportunity" && value !== "experiment" && value !== "ledger" && value !== "approval" && value !== "revenue" && value !== "external" && value !== "projects" && value !== "monitoring" && value !== "learning" && value !== "research" && value !== "allocation" && value !== "control-api" && value !== "pilot-dry-run" && value !== "pilot-preparation") throw new Error("SCOUT_MODE must be local, opportunity, experiment, ledger, approval, revenue, external, projects, monitoring, learning, research, allocation, control-api, pilot-dry-run or pilot-preparation");
   return value;
 }

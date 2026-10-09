@@ -19,6 +19,8 @@ const HELP = `Scout V12.5 Control API (local-only) v${VERSION}
 
 Usage:
   SCOUT_MODE=control-api automaton [--run]  Local HTTP control, no Ollama/execution
+  SCOUT_MODE=pilot-preparation automaton --prepare | --inspect | --events
+                          V12.7 local dossiers and exact manual approvals; no execution
   SCOUT_MODE=allocation automaton --run [--source research|opportunity]
   SCOUT_MODE=allocation automaton --calculate-allocation [--source research|opportunity]
   SCOUT_MODE=allocation automaton --inspect-allocation
@@ -112,6 +114,9 @@ Environment:
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "pilot-preparation") {
+    const { runPreparationCli } = await import("./agent/pilot-preparation.js"); await runPreparationCli(args); return;
+  }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "pilot-dry-run") {
     try { const { runPilotCli } = await import("./agent/pilot-dry-run.js"); await runPilotCli(args); }
     catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }

@@ -30,7 +30,7 @@ function decode(raw: string, root: string, key: Buffer): EventState {
     for (const ref of [e.subject_id, e.source_ref, e.attention_id]) if (typeof ref !== "string" || !/^[a-zA-Z0-9_-]{1,120}$/.test(ref)) throw new Error("Invalid event reference");
     time(e.created_at); seen.add(e.event_id);
   });
-  if (!state.checkpoints || typeof state.checkpoints !== "object" || Array.isArray(state.checkpoints) || Object.keys(state.checkpoints).length > 10) throw new Error("Invalid event checkpoints");
+  if (!state.checkpoints || typeof state.checkpoints !== "object" || Array.isArray(state.checkpoints) || Object.keys(state.checkpoints).length > 11) throw new Error("Invalid event checkpoints");
   for (const pin of Object.values(state.checkpoints)) { exact(pin, ["count", "hash"]); hex(pin.hash); if (!Number.isSafeInteger(pin.count) || pin.count < 0 || pin.count > 10000) throw new Error("Invalid checkpoint count"); }
   return state;
 }
