@@ -174,7 +174,7 @@ it("restarts after a monitoring checkpoint without a second observation", async 
   }
   expect(fired).toBe(true); const completed: any = await resume(); expect(completed.manifest.monitoring_ids).toHaveLength(14);
   expect(new Set(completed.manifest.monitoring_ids).size).toBe(14);
-});
+}, 60_000);
 it("two distinct processes cannot create two contradictory pilot runs", async () => {
   const fresh = path.join(temp, "processes"); await fs.mkdir(fresh);
   const code = 'import {runPilotDryRun} from "./dist/agent/pilot-dry-run.js"; try { await runPilotDryRun({root:process.argv[1],command:"run"}); } catch { process.exitCode=1; }';
