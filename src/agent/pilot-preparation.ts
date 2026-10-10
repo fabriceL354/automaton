@@ -10,6 +10,7 @@ import { canonicalHash, digest, exact, hex, same, time } from "./project-model.j
 import { integerCents } from "./asset-lifecycle.js";
 import { PREPARATION_LIMITS, createPreparedProject, parsePreparationInput, preparationBlockers, reference, rejectSensitive, type Dossier, type PreparedProject } from "./pilot-preparation-model.js";
 import { addPreparationEvent, loadPreparation, savePreparation, type PreparationState } from "./pilot-preparation-store.js";
+import { assertPilotNotStopped, pilotStopped } from "./pilot-stop.js";
 export type PreparationCommand = { kind: "prepare" | "inspect" | "events" } |
   { kind: "approve" | "deny"; project_id: string; action_id: string; request_id: string; fingerprint: string } |
   { kind: "review"; project_id: string; dossier_hash: string; quote_cents: number; cost_proof_id: string } |
@@ -65,9 +66,9 @@ export function assertPreparationCapacity(s: AllocationSources, projects: Prepar
   if (exposure > 2000 || legacy.reduce((sum, p) => sum + p.plan.budget_cents, 0) + budget > 2000 || projects.some(p => p.reserved_budget_cents > 1000 || p.dossier.duration_days > 7)) throw new Error("SPENDING_CEILING_EXCEEDED");
   if (budget + planned > Math.min(PREPARATION_LIMITS.REFERENCE_CAPITAL_CENTS, ledger.available_balance_cents)) throw new Error("INSUFFICIENT_BUDGET");
 }
-function projection(state: PreparationState, now: string, missing: string[]) {
+function projection(state: PreparationState, now: string, missing: string[], stopped = false) {
   const projects = state.projects.map(p => {
-    const blockers = [...preparationBlockers(p, now), ...(missing.some(m => m.startsWith(p.dossier.opportunity_id + ":")) ? ["MISSING_EVIDENCE"] : [])];
+    const blockers = [...preparationBlockers(p, now), ...(state.supervision ? ["ATOMIC_HANDOVER_NOT_IMPLEMENTED"] : []), ...(stopped ? ["EMERGENCY_STOP"] : []), ...(missing.some(m => m.startsWith(p.dossier.opportunity_id + ":")) ? ["MISSING_EVIDENCE"] : [])];
     const total = (kind: string, phase?: string) => integerCents(p.declarations.filter(r => r.kind === kind && (!phase || r.phase === phase)).reduce((s, r) => s + r.amount_cents, 0));
     return { ...p, technical_readiness: "PREPARED_OFFLINE", commercial_validation: p.commercial_review ? "HUMAN_DOCUMENTED_REVIEW_NOT_BANK_VERIFICATION" : "REQUIRES_HUMAN_VERIFICATION",
       human_authorization: p.requests.every(r => r.status === "approved") && now < p.dossier.review_expires_at ? "APPROVED_FOR_EXACT_MANUAL_ACTIONS_ONLY" : "NOT_CURRENTLY_APPROVED",
@@ -126,6 +127,7 @@ export async function runPilotPreparation(options: { root?: string; command: Pre
     if (command.kind === "review" || command.kind === "approve" || command.kind === "deny" || command.kind === "declare") {
       const project = state.projects.find(p => p.project_id === command.project_id);
       if (!project) throw new Error("Exact prepared project required");
+      if (state.supervision && command.kind === "declare" && (preparationBlockers(project, now).length || missing.some(m => m.startsWith(project.dossier.opportunity_id + ":")))) throw new Error("Current exact authorization and evidence required for supervised declaration");
       if (command.kind !== "declare" && (now >= project.dossier.review_expires_at || missing.some(m => m.startsWith(project.dossier.opportunity_id + ":")))) throw new Error("Expired approval or missing evidence");
       if (command.kind === "review") {
         if (project.dossier.fictional || project.dossier_hash !== command.dossier_hash || !project.dossier.proofs.some(p => p.proof_id === command.cost_proof_id && p.purpose === "cost") || !project.dossier.proofs.some(p => p.purpose === "market") || command.quote_cents > project.dossier.budget_cents) throw new Error("Commercial review requires exact scope and cost/market evidence");
@@ -146,7 +148,7 @@ export async function runPilotPreparation(options: { root?: string; command: Pre
       const blockers = preparationBlockers(project, now);
       if (missing.some(m => m.startsWith(project.dossier.opportunity_id + ":")) || blockers.includes("MISSING_EVIDENCE")) addPreparationEvent(state, "MISSING_EVIDENCE", project.project_id, now);
       if (blockers.includes("APPROVAL_EXPIRED")) addPreparationEvent(state, "BLOCKED", project.project_id, now);
-      if (!blockers.length && !missing.some(m => m.startsWith(project.dossier.opportunity_id + ":"))) addPreparationEvent(state, "READY_FOR_MANUAL_LAUNCH", project.project_id, now);
+      if (!state.supervision && !blockers.length && !missing.some(m => m.startsWith(project.dossier.opportunity_id + ":"))) addPreparationEvent(state, "READY_FOR_MANUAL_LAUNCH", project.project_id, now);
     }
     // Only genuine historical V9 timestamps/results can produce these events.
     // A preparation expiry never masquerades as an experiment completion.
@@ -160,8 +162,10 @@ export async function runPilotPreparation(options: { root?: string; command: Pre
     if (!loaded.state || !same(previous, next)) {
       state.updated_at = now; Object.assign(state, pins(sources));
       if (!same(await readAllocationSources(root, input.source), sources) || await readConfined(root, "pilot-preparation-input.json", 128 * 1024) !== raw || !same(await verifyProofs(root, input.dossiers), missing)) throw new Error("Sources changed before preparation commit");
+      await assertPilotNotStopped(root);
       await savePreparation(root, state, loaded.key);
     }
+    await assertPilotNotStopped(root);
     return projection(state, now, missing);
   }, "preparation");
 }
@@ -169,18 +173,28 @@ export async function runPilotPreparation(options: { root?: string; command: Pre
  * containing arbitrary operator text are exported through HTTP. */
 export async function preparationControlView(root: string) {
   const loaded = await loadPreparation(root); if (!loaded.state) return null;
-  const state = loaded.state, raw = await readConfined(root, "pilot-preparation-input.json", 128 * 1024);
-  if (!raw || canonicalHash(raw) !== state.input_hash) throw new Error("Preparation input changed");
-  const input = parsePreparationInput(raw), sources = await readAllocationSources(root, state.source_file);
-  verifyPrefixes(state, sources); assertPreparationCapacity(sources, state.projects);
-  const missing = await verifyProofs(root, input.dossiers), now = new Date().toISOString();
-  if (now < state.updated_at) throw new Error("Preparation clock rollback");
-  const view = projection(state, now, missing);
+  const stopped = await pilotStopped(root);
+  const { state, view } = await readPreparationSnapshot(root, new Date().toISOString(), stopped);
   return { version: "12.7", mode: "PREPARATION_ONLY", total_reserved_cents: view.total_preparation_reserved_cents,
+    emergency_stopped: stopped, supervision_version: state.supervision?.version ?? null,
     projects: view.projects.map(p => ({ project_id: p.project_id, dossier_hash: p.dossier_hash, readiness: p.readiness, blockers: p.blockers,
       budget_cents: p.dossier.budget_cents, duration_days: p.dossier.duration_days, expires_at: p.dossier.review_expires_at,
       approvals: p.requests.map(r => ({ request_id: r.request_id, action_id: r.action_id, fingerprint: r.fingerprint, status: r.status, expires_at: r.expires_at, max_amount_cents: r.max_amount_cents })),
       confirmed_expense_cents: null, confirmed_revenue_cents: null, can_execute: false })), events: state.events };
+}
+/** Caller must hold the shared lock. Full read-only integrity check reused by
+ * V12.8 and the Control API; does not silently renew or initialize anything. */
+export async function readPreparationSnapshot(root: string, now: string, stopped = false) {
+  time(now);
+  const loaded = await loadPreparation(root);
+  if (!loaded.state || !loaded.key) throw new Error("Prepare the V12.7 batch explicitly first");
+  const state = loaded.state, raw = await readConfined(root, "pilot-preparation-input.json", 128 * 1024);
+  if (!raw || canonicalHash(raw) !== state.input_hash) throw new Error("Preparation input changed");
+  const input = parsePreparationInput(raw), sources = await readAllocationSources(root, state.source_file);
+  verifyPrefixes(state, sources); assertPreparationCapacity(sources, state.projects);
+  const missing = await verifyProofs(root, input.dossiers);
+  if (now < state.updated_at || now < sourceTime(sources.financial)) throw new Error("Preparation clock rollback");
+  return { state, key: loaded.key, sources, raw, missing, view: projection(state, now, missing, stopped) };
 }
 export async function runPreparationCli(args: string[]) {
   try {

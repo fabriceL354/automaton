@@ -10,6 +10,7 @@ import { canonicalHash, exact, hex, same, structured, time } from "./project-mod
 import { PREPARATION_EVENTS, PREPARATION_LIMITS, createPreparedProject, parseDossier, reference, requestFingerprint, type PreparedProject, type PreparationEventType } from "./pilot-preparation-model.js";
 import { integerCents } from "./asset-lifecycle.js";
 import type { SourcePin } from "./learning-model.js";
+import { validateSupervision, type PilotSupervision } from "./pilot-readiness-model.js";
 export interface PreparationEvent {
   event_id: string; sequence: number; event_type: PreparationEventType; subject_id: string; created_at: string;
   requires_human_action: boolean; action_authorized: false; money_moved: false;
@@ -19,6 +20,7 @@ export interface PreparationState {
   input_hash: string; source_file: "research.json" | "opportunities.json"; source_hash: string;
   financial_pin: SourcePin; learning_pin: { count: number; hash: string }; approval_pins: { requests: { count: number; hash: string }; decisions: { count: number; hash: string } };
   projects: PreparedProject[]; events: PreparationEvent[];
+  supervision?: PilotSupervision;
 }
 export function preparationStoreRoot(root: string): string { return path.join(path.dirname(root), `.scout-preparation-${canonicalHash(root).slice(0, 32)}`); }
 function signature(s: PreparationState, key: Buffer) { return createHmac("sha256", key).update(JSON.stringify(s)).digest("hex"); }
@@ -26,9 +28,10 @@ export function decodePreparation(raw: string, root: string, key: Buffer): Prepa
   if (Buffer.byteLength(raw) > PREPARATION_LIMITS.MAX_BYTES) throw new Error("Preparation byte limit");
   const d = exact(JSON.parse(raw), ["state", "mac"]), s = d.state as PreparationState;
   if (!timingSafeEqual(Buffer.from(hex(d.mac), "hex"), Buffer.from(signature(s, key), "hex"))) throw new Error("Preparation authentication failed");
-  exact(s, ["version", "mode", "workspace", "updated_at", "input_hash", "source_file", "source_hash", "financial_pin", "learning_pin", "approval_pins", "projects", "events"]);
+  exact(s, ["version", "mode", "workspace", "updated_at", "input_hash", "source_file", "source_hash", "financial_pin", "learning_pin", "approval_pins", "projects", "events", ...(Object.hasOwn(s, "supervision") ? ["supervision"] : [])]);
   if (s.version !== "12.7" || s.mode !== "PREPARATION_ONLY" || s.workspace !== root || !["research.json", "opportunities.json"].includes(s.source_file)) throw new Error("Invalid preparation state");
   time(s.updated_at); hex(s.input_hash); hex(s.source_hash);
+  if (Object.hasOwn(s, "supervision")) validateSupervision(s.supervision!, s.updated_at);
   if (!Array.isArray(s.projects) || s.projects.length > 2 || new Set(s.projects.map(p => p.project_id)).size !== s.projects.length || !Array.isArray(s.events) || s.events.length > PREPARATION_LIMITS.MAX_RECORDS) throw new Error("Preparation history limits");
   if (s.projects.reduce((sum, p) => sum + integerCents(p.reserved_budget_cents), 0) > 2000) throw new Error("Preparation exposure limit");
   const declarationIds = new Set<string>();

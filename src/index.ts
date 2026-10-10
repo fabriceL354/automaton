@@ -18,6 +18,10 @@ const VERSION = "0.12.5";
 const HELP = `Scout V12.5 Control API (local-only) v${VERSION}
 
 Usage:
+  SCOUT_MODE=pilot-readiness automaton --prepare-handover | --report | --events | --stop-status
+  SCOUT_MODE=pilot-readiness automaton --halt operator-stop
+  SCOUT_MODE=pilot-readiness automaton --check-action PROJECT_ID DOSSIER_HASH ACTION_ID REQUEST_ID FINGERPRINT
+                          V12.8 supervised readiness only; no transfer or execution
   SCOUT_MODE=control-api automaton [--run]  Local HTTP control, no Ollama/execution
   SCOUT_MODE=pilot-preparation automaton --prepare | --inspect | --events
                           V12.7 local dossiers and exact manual approvals; no execution
@@ -114,6 +118,9 @@ Environment:
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "pilot-readiness") {
+    const { runReadinessCli } = await import("./agent/pilot-readiness.js"); await runReadinessCli(args); return;
+  }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "pilot-preparation") {
     const { runPreparationCli } = await import("./agent/pilot-preparation.js"); await runPreparationCli(args); return;
   }
