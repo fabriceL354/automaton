@@ -18,6 +18,9 @@ const VERSION = "0.12.5";
 const HELP = `Scout V12.5 Control API (local-only) v${VERSION}
 
 Usage:
+  SCOUT_MODE=operational-planning automaton --plan | --report | --report-markdown | --events | --stop-status
+  SCOUT_MODE=operational-planning automaton --halt operator-stop
+  SCOUT_MODE=operational-planning automaton --check-action PLAN_ID PROJECT_ID DOSSIER_HASH ACTION_ID REQUEST_ID FINGERPRINT
   SCOUT_MODE=pilot-readiness automaton --prepare-handover | --report | --events | --stop-status
   SCOUT_MODE=pilot-readiness automaton --halt operator-stop
   SCOUT_MODE=pilot-readiness automaton --check-action PROJECT_ID DOSSIER_HASH ACTION_ID REQUEST_ID FINGERPRINT
@@ -118,6 +121,9 @@ Environment:
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "operational-planning") {
+    const { runPlanningCli } = await import("./agent/operational-planning.js"); await runPlanningCli(args); return;
+  }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "pilot-readiness") {
     const { runReadinessCli } = await import("./agent/pilot-readiness.js"); await runReadinessCli(args); return;
   }

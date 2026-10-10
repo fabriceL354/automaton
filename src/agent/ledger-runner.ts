@@ -58,9 +58,10 @@ export async function atomicWrite(root: string, name: string, content: string, v
 }
 
 /** Exclusive across Scout processes; never steal or auto-expire a stale lock. */
-export async function locked<T>(root: string, operation: () => Promise<T>, preparationScope?: "preparation" | "control-read" | "readiness" | "readiness-read"): Promise<T> {
-  if (preparationScope && (pilotContext()?.mode ?? process.env.SCOUT_MODE) !== (preparationScope === "preparation" ? "pilot-preparation" : preparationScope === "control-read" ? "control-api" : "pilot-readiness")) throw new Error("Explicit preparation lock scope required");
-  if (preparationScope !== "control-read" && preparationScope !== "readiness-read") await assertPilotNotStopped(root);
+export async function locked<T>(root: string, operation: () => Promise<T>, preparationScope?: "preparation" | "control-read" | "readiness" | "readiness-read" | "planning" | "planning-read"): Promise<T> {
+  if (preparationScope && (pilotContext()?.mode ?? process.env.SCOUT_MODE) !== (preparationScope === "preparation" ? "pilot-preparation" : preparationScope === "control-read" ? "control-api" : preparationScope === "planning" || preparationScope === "planning-read" ? "operational-planning" : "pilot-readiness")) throw new Error("Explicit preparation lock scope required");
+  const readOnly = preparationScope === "control-read" || preparationScope === "readiness-read" || preparationScope === "planning-read";
+  if (!readOnly) await assertPilotNotStopped(root);
   // V12.7 earmarks share this lock but do not alter V5. Once the preparation
   // anchor exists, legacy writers cannot commit parallel budgets or actions.
   // The check belongs INSIDE the acquired lock below to close startup races.
@@ -84,7 +85,7 @@ export async function locked<T>(root: string, operation: () => Promise<T>, prepa
   try {
     await lock.writeFile(JSON.stringify({ pid: process.pid, created_at: new Date().toISOString() }) + "\n");
     await lock.sync();
-    if (preparationScope !== "control-read" && preparationScope !== "readiness-read") await assertPilotNotStopped(root);
+    if (!readOnly) await assertPilotNotStopped(root);
     if (!preparationScope) {
       const store = path.join(path.dirname(root), `.scout-preparation-${createHash("sha256").update(JSON.stringify(root)).digest("hex").slice(0, 32)}`);
       try { await fs.lstat(store); await safePath(store, "state.json"); throw new Error("Preparation workspace is sealed against legacy writers; human inspection required"); }

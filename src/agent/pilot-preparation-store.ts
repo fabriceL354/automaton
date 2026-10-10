@@ -11,6 +11,7 @@ import { PREPARATION_EVENTS, PREPARATION_LIMITS, createPreparedProject, parseDos
 import { integerCents } from "./asset-lifecycle.js";
 import type { SourcePin } from "./learning-model.js";
 import { validateSupervision, type PilotSupervision } from "./pilot-readiness-model.js";
+import { validateOperationalPlanning, type OperationalPlanning } from "./operational-planning-model.js";
 export interface PreparationEvent {
   event_id: string; sequence: number; event_type: PreparationEventType; subject_id: string; created_at: string;
   requires_human_action: boolean; action_authorized: false; money_moved: false;
@@ -21,6 +22,7 @@ export interface PreparationState {
   financial_pin: SourcePin; learning_pin: { count: number; hash: string }; approval_pins: { requests: { count: number; hash: string }; decisions: { count: number; hash: string } };
   projects: PreparedProject[]; events: PreparationEvent[];
   supervision?: PilotSupervision;
+  planning?: OperationalPlanning;
 }
 export function preparationStoreRoot(root: string): string { return path.join(path.dirname(root), `.scout-preparation-${canonicalHash(root).slice(0, 32)}`); }
 function signature(s: PreparationState, key: Buffer) { return createHmac("sha256", key).update(JSON.stringify(s)).digest("hex"); }
@@ -28,10 +30,14 @@ export function decodePreparation(raw: string, root: string, key: Buffer): Prepa
   if (Buffer.byteLength(raw) > PREPARATION_LIMITS.MAX_BYTES) throw new Error("Preparation byte limit");
   const d = exact(JSON.parse(raw), ["state", "mac"]), s = d.state as PreparationState;
   if (!timingSafeEqual(Buffer.from(hex(d.mac), "hex"), Buffer.from(signature(s, key), "hex"))) throw new Error("Preparation authentication failed");
-  exact(s, ["version", "mode", "workspace", "updated_at", "input_hash", "source_file", "source_hash", "financial_pin", "learning_pin", "approval_pins", "projects", "events", ...(Object.hasOwn(s, "supervision") ? ["supervision"] : [])]);
+  exact(s, ["version", "mode", "workspace", "updated_at", "input_hash", "source_file", "source_hash", "financial_pin", "learning_pin", "approval_pins", "projects", "events", ...(Object.hasOwn(s, "supervision") ? ["supervision"] : []), ...(Object.hasOwn(s, "planning") ? ["planning"] : [])]);
   if (s.version !== "12.7" || s.mode !== "PREPARATION_ONLY" || s.workspace !== root || !["research.json", "opportunities.json"].includes(s.source_file)) throw new Error("Invalid preparation state");
   time(s.updated_at); hex(s.input_hash); hex(s.source_hash);
   if (Object.hasOwn(s, "supervision")) validateSupervision(s.supervision!, s.updated_at);
+  if (Object.hasOwn(s, "planning")) {
+    if (!s.supervision) throw new Error("V13 requires V12.8 supervision");
+    validateOperationalPlanning(s.planning!, s.updated_at);
+  }
   if (!Array.isArray(s.projects) || s.projects.length > 2 || new Set(s.projects.map(p => p.project_id)).size !== s.projects.length || !Array.isArray(s.events) || s.events.length > PREPARATION_LIMITS.MAX_RECORDS) throw new Error("Preparation history limits");
   if (s.projects.reduce((sum, p) => sum + integerCents(p.reserved_budget_cents), 0) > 2000) throw new Error("Preparation exposure limit");
   const declarationIds = new Set<string>();
@@ -61,6 +67,13 @@ export function decodePreparation(raw: string, root: string, key: Buffer): Prepa
       declarationIds.add(r.declaration_id);
     }
     if (p.declarations.filter(r => r.kind === "expense").reduce((sum, r) => sum + r.amount_cents, 0) > p.reserved_budget_cents) throw new Error("Declared expense exceeds budget");
+  }
+  if (s.planning) for (const { plan } of s.planning.plans) {
+    if (plan.provenance.input_hash !== s.input_hash || plan.provenance.handover_plan_hash !== s.supervision!.plan_hash || plan.projects.length !== s.projects.length) throw new Error("Planning provenance binding mismatch");
+    for (const proposed of plan.projects) {
+      const input = proposed.input, project = s.projects.find(p => p.project_id === input.project_id);
+      if (!project || input.dossier_hash !== project.dossier_hash || !same(input.dossier, project.dossier) || input.candidate_cost_cents !== project.candidate.estimated_cost_cents || input.cost_basis !== project.candidate.cost_basis || input.human_reviewed_quote_cents !== null && input.human_reviewed_quote_cents !== project.commercial_review?.confirmed_quote_cents) throw new Error("Planning project binding mismatch");
+    }
   }
   const seen = new Set<string>();
   for (const [i, e] of s.events.entries()) {

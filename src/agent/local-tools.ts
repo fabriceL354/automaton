@@ -87,6 +87,7 @@ export function createLocalWorkspaceTools(root = scoutWorkspaceRoot()): Automato
         // Economic state belongs exclusively to the ledger runtime, including
         // its report, lock and temporary files. No model-accessible write path.
         if (/^\.?pilot-(?:dry-run|preparation|readiness|stop)(?:[.-]|$)/i.test(path.basename(path.resolve(root, args.path)))) return "ERROR: pilot files are runtime-controlled";
+        if (/^\.?operational-planning(?:[.-]|$)/i.test(path.basename(path.resolve(root, args.path)))) return "ERROR: planning files are runtime-controlled";
         if (/^\.?capital-allocation(?:[.-]|$)/i.test(path.basename(path.resolve(root, args.path)))) {
           return "ERROR: allocation files are runtime-controlled";
         }
