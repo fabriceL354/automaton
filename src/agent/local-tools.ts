@@ -82,6 +82,8 @@ export function createLocalWorkspaceTools(root = scoutWorkspaceRoot()): Automato
       execute: async (args) => {
         if (typeof args.path !== "string" || typeof args.content !== "string") return "ERROR: path and content required";
         if (Buffer.byteLength(args.content) > MAX_FILE_BYTES) return "ERROR: content exceeds 128 KiB";
+        const documentaryPath = path.relative(root, path.resolve(root, args.path));
+        if (documentaryPath.split(path.sep)[0] === "documentary-evidence" || /^\.?documentary-(?:state|report|event|reconciliation)(?:[.-]|$)/i.test(path.basename(documentaryPath))) return "ERROR: documentary inputs and proofs are operator-only";
         // Mission is supplied by the operator and must survive agent mistakes.
         if (path.resolve(root, args.path) === path.join(root, "MISSION.txt")) return "ERROR: MISSION.txt is read-only";
         // Economic state belongs exclusively to the ledger runtime, including

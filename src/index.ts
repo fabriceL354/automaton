@@ -18,6 +18,9 @@ const VERSION = "0.12.5";
 const HELP = `Scout V12.5 Control API (local-only) v${VERSION}
 
 Usage:
+  SCOUT_MODE=economic-documentation automaton --inspect | --recover
+  SCOUT_MODE=economic-documentation automaton --append | --reconcile OPERATOR_ID PROJECT_ID DOSSIER_HASH LOCAL_EVENT_ID
+  V14.4 records local documentary observations only; no bank confirmation or financial write.
   SCOUT_MODE=seller-account automaton --initialize | --inspect | --recover
   SCOUT_MODE=seller-account automaton --declare | --new-declaration OPERATOR_ID OPPORTUNITY_ID DOSSIER_HASH PLATFORM
   SCOUT_MODE=seller-account automaton --validate | --deny | --revoke | --admit OPERATOR_ID ACCOUNT_ID REQUEST_ID FINGERPRINT
@@ -129,6 +132,9 @@ Environment:
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "economic-documentation") {
+    const { runDocumentaryCli } = await import("./agent/documentary.js"); await runDocumentaryCli(args); return;
+  }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "seller-account") {
     const { runSellerAccountCli } = await import("./agent/seller-account.js"); await runSellerAccountCli(args); return;
   }
