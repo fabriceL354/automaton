@@ -58,9 +58,9 @@ export async function atomicWrite(root: string, name: string, content: string, v
 }
 
 /** Exclusive across Scout processes; never steal or auto-expire a stale lock. */
-export async function locked<T>(root: string, operation: () => Promise<T>, preparationScope?: "preparation" | "control-read" | "readiness" | "readiness-read" | "planning" | "planning-read"): Promise<T> {
-  if (preparationScope && (pilotContext()?.mode ?? process.env.SCOUT_MODE) !== (preparationScope === "preparation" ? "pilot-preparation" : preparationScope === "control-read" ? "control-api" : preparationScope === "planning" || preparationScope === "planning-read" ? "operational-planning" : "pilot-readiness")) throw new Error("Explicit preparation lock scope required");
-  const readOnly = preparationScope === "control-read" || preparationScope === "readiness-read" || preparationScope === "planning-read";
+export async function locked<T>(root: string, operation: () => Promise<T>, preparationScope?: "preparation" | "control-read" | "readiness" | "readiness-read" | "planning" | "planning-read" | "handover" | "handover-read"): Promise<T> {
+  if (preparationScope && (pilotContext()?.mode ?? process.env.SCOUT_MODE) !== (preparationScope.startsWith("handover") ? "economic-handover" : preparationScope === "preparation" ? "pilot-preparation" : preparationScope === "control-read" ? "control-api" : preparationScope === "planning" || preparationScope === "planning-read" ? "operational-planning" : "pilot-readiness")) throw new Error("Explicit preparation lock scope required");
+  const readOnly = preparationScope === "control-read" || preparationScope === "readiness-read" || preparationScope === "planning-read" || preparationScope === "handover-read";
   if (!readOnly) await assertPilotNotStopped(root);
   // V12.7 earmarks share this lock but do not alter V5. Once the preparation
   // anchor exists, legacy writers cannot commit parallel budgets or actions.
@@ -86,6 +86,10 @@ export async function locked<T>(root: string, operation: () => Promise<T>, prepa
     await lock.writeFile(JSON.stringify({ pid: process.pid, created_at: new Date().toISOString() }) + "\n");
     await lock.sync();
     if (!readOnly) await assertPilotNotStopped(root);
+    if (!preparationScope?.startsWith("handover")) {
+      const { assertHandoverInstalled } = await import("./economic-handover-store.js");
+      await assertHandoverInstalled(root);
+    }
     if (!preparationScope) {
       const store = path.join(path.dirname(root), `.scout-preparation-${createHash("sha256").update(JSON.stringify(root)).digest("hex").slice(0, 32)}`);
       try { await fs.lstat(store); await safePath(store, "state.json"); throw new Error("Preparation workspace is sealed against legacy writers; human inspection required"); }

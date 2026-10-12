@@ -44,9 +44,15 @@ export async function checkProjectViews(root: string, model: ProjectModel): Prom
   const expected = projectViews(model);
   for (const [i, name] of PROJECT_FILES.entries()) if (await readConfined(root, name, PROJECT_LIMITS.MAX_BYTES) !== expected[i]) throw new Error(`Modified, missing or orphan ${name}`);
 }
-async function persistState(root: string, state: ProjectState, key: Buffer): Promise<void> {
+/** Serialize the existing V9 authority; V14.2 uses it in a shared write set. */
+export function encodeProjectState(root: string, state: ProjectState, key: Buffer): string {
   const raw = structured({ ...state, mac: sign(state, key) });
   if (Buffer.byteLength(raw) > PROJECT_LIMITS.MAX_BYTES) throw new Error("Project history size limit");
+  decode(raw, root, key);
+  return raw;
+}
+async function persistState(root: string, state: ProjectState, key: Buffer): Promise<void> {
+  const raw = encodeProjectState(root, state, key);
   await atomicWrite(projectStoreRoot(root), "state.json", raw, v => decode(v, root, key));
   if (await readConfined(projectStoreRoot(root), "state.json", PROJECT_LIMITS.MAX_BYTES) !== raw) throw new Error("Project history reread mismatch");
 }

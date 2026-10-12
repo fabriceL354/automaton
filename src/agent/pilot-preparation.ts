@@ -59,21 +59,31 @@ async function verifyProofs(root: string, dossiers: Dossier[]) {
  * capital and bookkeeping availability are neither bank balance nor funds proof. */
 export function assertPreparationCapacity(s: AllocationSources, projects: PreparedProject[]) {
   const ledger = s.financial.ledger, legacy = s.financial.model.projects;
-  const budget = integerCents(projects.reduce((sum, p) => sum + p.reserved_budget_cents, 0));
+  const outstanding = projects.filter(p => !p.accounting_transfer);
+  const targetIds = new Set<string>();
+  for (const p of projects.filter(p => p.accounting_transfer)) {
+    const r = p.accounting_transfer!, target = legacy.find(t => t.plan.project_id === r.target_project_id);
+    const entry = ledger.entries.find(e => e.id === r.ledger_entry_id);
+    if (targetIds.has(r.target_project_id) || !target || target.experiment_id !== r.experiment_id || target.plan.budget_cents !== p.reserved_budget_cents || target.plan.name !== p.candidate.title || target.status !== "reserved" || target.approval?.request.status !== "pending" || !entry || entry.type !== "reserve" || entry.hash !== r.ledger_entry_hash || entry.amount_cents !== r.amount_cents || entry.experiment?.id !== r.experiment_id || !target.approval_scope?.reservation_reference || target.approval_scope.reservation_reference.entry_id !== entry.id) throw new Error("ACCOUNTING_TRANSFER_BINDING_MISMATCH");
+    targetIds.add(r.target_project_id);
+  }
+  const budget = integerCents(outstanding.reduce((sum, p) => sum + p.reserved_budget_cents, 0));
   const planned = integerCents(legacy.filter(p => p.status === "planned").reduce((sum, p) => sum + p.plan.budget_cents, 0));
   const exposure = integerCents(ledger.reserved_balance_cents + ledger.total_recorded_expenses_cents + planned + budget);
-  if (legacy.length + projects.length > 2) throw new Error("PROJECT_LIMIT_EXCEEDED");
+  if (legacy.length + outstanding.length > 2) throw new Error("PROJECT_LIMIT_EXCEEDED");
   if (exposure > 2000 || legacy.reduce((sum, p) => sum + p.plan.budget_cents, 0) + budget > 2000 || projects.some(p => p.reserved_budget_cents > 1000 || p.dossier.duration_days > 7)) throw new Error("SPENDING_CEILING_EXCEEDED");
   if (budget + planned > Math.min(PREPARATION_LIMITS.REFERENCE_CAPITAL_CENTS, ledger.available_balance_cents)) throw new Error("INSUFFICIENT_BUDGET");
 }
 function projection(state: PreparationState, now: string, missing: string[], stopped = false) {
   const projects = state.projects.map(p => {
-    const blockers = [...preparationBlockers(p, now), ...(state.supervision ? ["ATOMIC_HANDOVER_NOT_IMPLEMENTED"] : []), ...(stopped ? ["EMERGENCY_STOP"] : []), ...(missing.some(m => m.startsWith(p.dossier.opportunity_id + ":")) ? ["MISSING_EVIDENCE"] : [])];
+    const blockers = [...preparationBlockers(p, now), ...(p.accounting_transfer ? ["ACCOUNTING_TRANSFER_ONLY_EXECUTION_FORBIDDEN"] : state.supervision ? ["ATOMIC_HANDOVER_NOT_IMPLEMENTED"] : []), ...(stopped ? ["EMERGENCY_STOP"] : []), ...(missing.some(m => m.startsWith(p.dossier.opportunity_id + ":")) ? ["MISSING_EVIDENCE"] : [])];
     const total = (kind: string, phase?: string) => integerCents(p.declarations.filter(r => r.kind === kind && (!phase || r.phase === phase)).reduce((s, r) => s + r.amount_cents, 0));
     return { ...p, technical_readiness: "PREPARED_OFFLINE", commercial_validation: p.commercial_review ? "HUMAN_DOCUMENTED_REVIEW_NOT_BANK_VERIFICATION" : "REQUIRES_HUMAN_VERIFICATION",
       human_authorization: p.requests.every(r => r.status === "approved") && now < p.dossier.review_expires_at ? "APPROVED_FOR_EXACT_MANUAL_ACTIONS_ONLY" : "NOT_CURRENTLY_APPROVED",
       readiness: blockers.length ? "BLOCKED" : "READY_FOR_MANUAL_LAUNCH", blockers,
       economics: { reference_capital_cents: 10000, planned_budget_cents: p.dossier.budget_cents, preparation_reserved_cents: p.reserved_budget_cents,
+        active_preparation_reserved_cents: p.accounting_transfer ? 0 : p.reserved_budget_cents,
+        reclassified_to_v5_cents: p.accounting_transfer?.amount_cents ?? 0,
         reservation_basis: "LOCAL_PREPARATION_EARMARK_NOT_V5_RESERVATION_OR_BANK_HOLD", estimated_cost_cents: p.candidate.estimated_cost_cents,
         human_documented_quote_cents: p.commercial_review?.confirmed_quote_cents ?? null, declared_expense_cents: total("expense"), evidence_confirmed_expense_cents: null,
         bank_verified_expense_cents: null, estimated_revenue_cents: p.dossier.estimated_revenue_cents, declared_revenue_cents: total("revenue"), confirmed_revenue_cents: null,
@@ -81,7 +91,7 @@ function projection(state: PreparationState, now: string, missing: string[], sto
       experimental_period: { started_at: null, deadline: null, result: null }, action_authorized: false, automatic_execution_available: false };
   });
   return { version: "12.7", mode: "PREPARATION_ONLY", reference_capital_cents: 10000, capital_is_bank_balance: false, real_money_spent_by_v12_7_cents: 0,
-    total_preparation_reserved_cents: projects.reduce((sum, p) => sum + p.reserved_budget_cents, 0), projects, events: state.events,
+    total_preparation_reserved_cents: projects.reduce((sum, p) => sum + (p.accounting_transfer ? 0 : p.reserved_budget_cents), 0), projects, events: state.events,
     notice: "NO_REAL_PILOT_STARTED; APPROVAL_IS_NOT_EXECUTION_OR_PAYMENT_PROOF; HUMAN_DECLARATIONS_ARE_UNVERIFIED" };
 }
 export async function runPilotPreparation(options: { root?: string; command: PreparationCommand; now?: () => string }) {
@@ -127,6 +137,7 @@ export async function runPilotPreparation(options: { root?: string; command: Pre
     if (command.kind === "review" || command.kind === "approve" || command.kind === "deny" || command.kind === "declare") {
       const project = state.projects.find(p => p.project_id === command.project_id);
       if (!project) throw new Error("Exact prepared project required");
+      if (project.accounting_transfer) throw new Error("Transferred project is accounting-only; no further preparation writes");
       if (state.supervision && command.kind === "declare" && (preparationBlockers(project, now).length || missing.some(m => m.startsWith(project.dossier.opportunity_id + ":")))) throw new Error("Current exact authorization and evidence required for supervised declaration");
       if (command.kind !== "declare" && (now >= project.dossier.review_expires_at || missing.some(m => m.startsWith(project.dossier.opportunity_id + ":")))) throw new Error("Expired approval or missing evidence");
       if (command.kind === "review") {

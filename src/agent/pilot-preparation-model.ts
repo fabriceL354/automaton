@@ -84,6 +84,9 @@ export interface PreparedProject {
   created_at: string; reserved_budget_cents: number; requests: PreparationRequest[];
   commercial_review: { reviewed_at: string; cost_proof_id: string; confirmed_quote_cents: number; scope_hash: string; human_reference: string } | null;
   declarations: { declaration_id: string; kind: "expense" | "revenue"; amount_cents: number; recorded_at: string; phase: "experiment" | "post_experiment"; proof_id: string | null; verification: "UNVERIFIED_HUMAN_DECLARATION" }[];
+  /** Historical earmark is retained; this receipt reclassifies it, never spends it. */
+  accounting_transfer?: { transfer_id: string; request_id: string; fingerprint: string; transferred_at: string;
+    target_project_id: string; experiment_id: string; ledger_entry_id: string; ledger_entry_hash: string; amount_cents: number };
 }
 export function requestFingerprint(r: PreparationRequest): string {
   const { fingerprint: _f, status: _s, decided_at: _d, human_reference: _h, ...body } = r; return canonicalHash(body);

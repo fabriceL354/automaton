@@ -18,6 +18,10 @@ const VERSION = "0.12.5";
 const HELP = `Scout V12.5 Control API (local-only) v${VERSION}
 
 Usage:
+  SCOUT_MODE=economic-handover automaton --inspect | --recover
+  SCOUT_MODE=economic-handover automaton --prepare PROJECT_ID DOSSIER_HASH
+  SCOUT_MODE=economic-handover automaton --approve | --deny | --transfer PROJECT_ID DOSSIER_HASH REQUEST_ID FINGERPRINT
+  V14.2 reclassifies bookkeeping only; no payments, publications or project starts.
   SCOUT_MODE=operational-planning automaton --plan | --report | --report-markdown | --events | --stop-status
   SCOUT_MODE=operational-planning automaton --halt operator-stop
   SCOUT_MODE=operational-planning automaton --check-action PLAN_ID PROJECT_ID DOSSIER_HASH ACTION_ID REQUEST_ID FINGERPRINT
@@ -121,6 +125,9 @@ Environment:
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "economic-handover") {
+    const { runHandoverCli } = await import("./agent/economic-handover.js"); await runHandoverCli(args); return;
+  }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "operational-planning") {
     const { runPlanningCli } = await import("./agent/operational-planning.js"); await runPlanningCli(args); return;
   }

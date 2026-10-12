@@ -42,7 +42,7 @@ export function decodePreparation(raw: string, root: string, key: Buffer): Prepa
   if (s.projects.reduce((sum, p) => sum + integerCents(p.reserved_budget_cents), 0) > 2000) throw new Error("Preparation exposure limit");
   const declarationIds = new Set<string>();
   for (const p of s.projects) {
-    exact(p, ["project_id", "dossier", "dossier_hash", "candidate", "created_at", "reserved_budget_cents", "requests", "commercial_review", "declarations"]);
+    exact(p, ["project_id", "dossier", "dossier_hash", "candidate", "created_at", "reserved_budget_cents", "requests", "commercial_review", "declarations", ...(Object.hasOwn(p, "accounting_transfer") ? ["accounting_transfer"] : [])]);
     const dossier = parseDossier(p.dossier); time(p.created_at);
     if (p.created_at > s.updated_at || dossier.review_expires_at <= p.created_at || Date.parse(dossier.review_expires_at) - Date.parse(p.created_at) > 7 * 86400000) throw new Error("Invalid preparation timing");
     const initial = createPreparedProject(dossier, p.candidate, p.created_at);
@@ -67,6 +67,12 @@ export function decodePreparation(raw: string, root: string, key: Buffer): Prepa
       declarationIds.add(r.declaration_id);
     }
     if (p.declarations.filter(r => r.kind === "expense").reduce((sum, r) => sum + r.amount_cents, 0) > p.reserved_budget_cents) throw new Error("Declared expense exceeds budget");
+    if (p.accounting_transfer) {
+      const r = p.accounting_transfer;
+      exact(r, ["transfer_id", "request_id", "fingerprint", "transferred_at", "target_project_id", "experiment_id", "ledger_entry_id", "ledger_entry_hash", "amount_cents"]);
+      reference(r.transfer_id); reference(r.request_id); reference(r.target_project_id); hex(r.fingerprint); hex(r.experiment_id); hex(r.ledger_entry_hash); time(r.transferred_at);
+      if (r.transfer_id !== `handover-${canonicalHash([p.project_id, p.dossier_hash]).slice(0, 32)}` || r.amount_cents !== p.reserved_budget_cents || r.amount_cents <= 0 || !/^entry-[0-9]{6}$/.test(r.ledger_entry_id) || r.transferred_at < p.created_at || r.transferred_at > s.updated_at) throw new Error("Invalid accounting reclassification");
+    }
   }
   if (s.planning) for (const { plan } of s.planning.plans) {
     if (plan.provenance.input_hash !== s.input_hash || plan.provenance.handover_plan_hash !== s.supervision!.plan_hash || plan.projects.length !== s.projects.length) throw new Error("Planning provenance binding mismatch");
@@ -94,9 +100,13 @@ export async function loadPreparation(root: string): Promise<{ state?: Preparati
   for (const name of ["state.json", "integrity-key"]) if ((await fs.stat(await safePath(store, name))).mode & 0o077) throw new Error("Preparation files must be private");
   const key = Buffer.from(keyRaw.trim(), "hex"); return { state: decodePreparation(raw, root, key), key };
 }
+export function encodePreparation(root: string, state: PreparationState, key: Buffer): string {
+  const raw = structured({ state, mac: signature(state, key) });
+  decodePreparation(raw, root, key);
+  return raw;
+}
 export async function savePreparation(root: string, state: PreparationState, key?: Buffer): Promise<void> {
-  const store = preparationStoreRoot(root), nextKey = key ?? randomBytes(32), raw = structured({ state, mac: signature(state, nextKey) });
-  decodePreparation(raw, root, nextKey);
+  const store = preparationStoreRoot(root), nextKey = key ?? randomBytes(32), raw = encodePreparation(root, state, nextKey);
   if (!key) {
     await safePath(store, "integrity-key", true);
     if ((await fs.stat(store)).mode & 0o077) throw new Error("Preparation store must be private");
