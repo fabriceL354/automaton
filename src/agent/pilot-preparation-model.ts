@@ -80,6 +80,8 @@ export interface PreparationRequest extends HumanAction {
   action_authorized: false; payment_proven: false;
 }
 export interface PreparedProject {
+  /** Preparation attestation only, never an executable or financial permission. */
+  account_validation?: import("./seller-account-model.js").AccountBinding;
   project_id: string; dossier: Dossier; dossier_hash: string; candidate: import("./allocation-sources.js").AllocationCandidate;
   created_at: string; reserved_budget_cents: number; requests: PreparationRequest[];
   commercial_review: { reviewed_at: string; cost_proof_id: string; confirmed_quote_cents: number; scope_hash: string; human_reference: string } | null;
@@ -103,7 +105,7 @@ export function createPreparedProject(dossier: Dossier, candidate: PreparedProje
   return { project_id, dossier, dossier_hash, candidate, created_at: at, reserved_budget_cents: dossier.budget_cents, requests, commercial_review: null, declarations: [] };
 }
 export function preparationBlockers(p: PreparedProject, now: string): string[] {
-  return [ ...(p.dossier.fictional ? ["FICTIONAL_PROJECT"] : []), ...(now >= p.dossier.review_expires_at ? ["APPROVAL_EXPIRED"] : []),
+  return [ ...(p.account_validation ? ["ACCOUNT_PREPARATION_ONLY_EXECUTION_FORBIDDEN"] : []), ...(p.dossier.fictional ? ["FICTIONAL_PROJECT"] : []), ...(now >= p.dossier.review_expires_at ? ["APPROVAL_EXPIRED"] : []),
     ...(p.candidate.cost_basis !== "SOURCE_ESTIMATE" || !p.dossier.proofs.some(e => e.purpose === "cost") || !p.dossier.proofs.some(e => e.purpose === "market") ? ["MISSING_EVIDENCE"] : []),
     ...(!p.commercial_review ? ["COMMERCIAL_REVIEW_REQUIRED"] : []), ...(p.requests.some(r => r.status !== "approved") ? ["APPROVAL_REQUIRED"] : []),
     ...(p.requests.some(r => r.kind === "manual_payment" && (!r.supplier || !r.beneficiary || !r.proof_ids.some(id => p.dossier.proofs.some(e => e.proof_id === id && e.purpose === "cost")))) ? ["PAYMENT_DETAILS_UNVERIFIED"] : []) ];

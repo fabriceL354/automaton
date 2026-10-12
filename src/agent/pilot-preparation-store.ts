@@ -12,6 +12,7 @@ import { integerCents } from "./asset-lifecycle.js";
 import type { SourcePin } from "./learning-model.js";
 import { validateSupervision, type PilotSupervision } from "./pilot-readiness-model.js";
 import { validateOperationalPlanning, type OperationalPlanning } from "./operational-planning-model.js";
+import { validateAccountProjects, type AccountHistory } from "./seller-account-model.js";
 export interface PreparationEvent {
   event_id: string; sequence: number; event_type: PreparationEventType; subject_id: string; created_at: string;
   requires_human_action: boolean; action_authorized: false; money_moved: false;
@@ -21,6 +22,7 @@ export interface PreparationState {
   input_hash: string; source_file: "research.json" | "opportunities.json"; source_hash: string;
   financial_pin: SourcePin; learning_pin: { count: number; hash: string }; approval_pins: { requests: { count: number; hash: string }; decisions: { count: number; hash: string } };
   projects: PreparedProject[]; events: PreparationEvent[];
+  seller_accounts?: AccountHistory;
   supervision?: PilotSupervision;
   planning?: OperationalPlanning;
 }
@@ -30,7 +32,7 @@ export function decodePreparation(raw: string, root: string, key: Buffer): Prepa
   if (Buffer.byteLength(raw) > PREPARATION_LIMITS.MAX_BYTES) throw new Error("Preparation byte limit");
   const d = exact(JSON.parse(raw), ["state", "mac"]), s = d.state as PreparationState;
   if (!timingSafeEqual(Buffer.from(hex(d.mac), "hex"), Buffer.from(signature(s, key), "hex"))) throw new Error("Preparation authentication failed");
-  exact(s, ["version", "mode", "workspace", "updated_at", "input_hash", "source_file", "source_hash", "financial_pin", "learning_pin", "approval_pins", "projects", "events", ...(Object.hasOwn(s, "supervision") ? ["supervision"] : []), ...(Object.hasOwn(s, "planning") ? ["planning"] : [])]);
+  exact(s, ["version", "mode", "workspace", "updated_at", "input_hash", "source_file", "source_hash", "financial_pin", "learning_pin", "approval_pins", "projects", "events", ...(Object.hasOwn(s, "supervision") ? ["supervision"] : []), ...(Object.hasOwn(s, "planning") ? ["planning"] : []), ...(Object.hasOwn(s, "seller_accounts") ? ["seller_accounts"] : [])]);
   if (s.version !== "12.7" || s.mode !== "PREPARATION_ONLY" || s.workspace !== root || !["research.json", "opportunities.json"].includes(s.source_file)) throw new Error("Invalid preparation state");
   time(s.updated_at); hex(s.input_hash); hex(s.source_hash);
   if (Object.hasOwn(s, "supervision")) validateSupervision(s.supervision!, s.updated_at);
@@ -42,7 +44,7 @@ export function decodePreparation(raw: string, root: string, key: Buffer): Prepa
   if (s.projects.reduce((sum, p) => sum + integerCents(p.reserved_budget_cents), 0) > 2000) throw new Error("Preparation exposure limit");
   const declarationIds = new Set<string>();
   for (const p of s.projects) {
-    exact(p, ["project_id", "dossier", "dossier_hash", "candidate", "created_at", "reserved_budget_cents", "requests", "commercial_review", "declarations", ...(Object.hasOwn(p, "accounting_transfer") ? ["accounting_transfer"] : [])]);
+    exact(p, ["project_id", "dossier", "dossier_hash", "candidate", "created_at", "reserved_budget_cents", "requests", "commercial_review", "declarations", ...(Object.hasOwn(p, "accounting_transfer") ? ["accounting_transfer"] : []), ...(Object.hasOwn(p, "account_validation") ? ["account_validation"] : [])]);
     const dossier = parseDossier(p.dossier); time(p.created_at);
     if (p.created_at > s.updated_at || dossier.review_expires_at <= p.created_at || Date.parse(dossier.review_expires_at) - Date.parse(p.created_at) > 7 * 86400000) throw new Error("Invalid preparation timing");
     const initial = createPreparedProject(dossier, p.candidate, p.created_at);
@@ -74,6 +76,7 @@ export function decodePreparation(raw: string, root: string, key: Buffer): Prepa
       if (r.transfer_id !== `handover-${canonicalHash([p.project_id, p.dossier_hash]).slice(0, 32)}` || r.amount_cents !== p.reserved_budget_cents || r.amount_cents <= 0 || !/^entry-[0-9]{6}$/.test(r.ledger_entry_id) || r.transferred_at < p.created_at || r.transferred_at > s.updated_at) throw new Error("Invalid accounting reclassification");
     }
   }
+  validateAccountProjects(s.seller_accounts, s.projects, s.updated_at);
   if (s.planning) for (const { plan } of s.planning.plans) {
     if (plan.provenance.input_hash !== s.input_hash || plan.provenance.handover_plan_hash !== s.supervision!.plan_hash || plan.projects.length !== s.projects.length) throw new Error("Planning provenance binding mismatch");
     for (const proposed of plan.projects) {
@@ -106,6 +109,14 @@ export function encodePreparation(root: string, state: PreparationState, key: Bu
   return raw;
 }
 export async function savePreparation(root: string, state: PreparationState, key?: Buffer): Promise<void> {
+  if (key) {
+    const { assertAccountWitness, accountStatePin, commitAccountPreparation } = await import("./seller-account-store.js");
+    await assertAccountWitness(root);
+    const previous = await loadPreparation(root);
+    if (previous.state && accountStatePin(previous.state) !== accountStatePin(state)) {
+      await commitAccountPreparation(root, state, key); return;
+    }
+  }
   const store = preparationStoreRoot(root), nextKey = key ?? randomBytes(32), raw = encodePreparation(root, state, nextKey);
   if (!key) {
     await safePath(store, "integrity-key", true);

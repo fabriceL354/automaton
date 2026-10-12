@@ -11,6 +11,7 @@ import { integerCents } from "./asset-lifecycle.js";
 import { PREPARATION_LIMITS, createPreparedProject, parsePreparationInput, preparationBlockers, reference, rejectSensitive, type Dossier, type PreparedProject } from "./pilot-preparation-model.js";
 import { addPreparationEvent, loadPreparation, savePreparation, type PreparationState } from "./pilot-preparation-store.js";
 import { assertPilotNotStopped, pilotStopped } from "./pilot-stop.js";
+import { accountPreparationBlockers } from "./seller-account-model.js";
 export type PreparationCommand = { kind: "prepare" | "inspect" | "events" } |
   { kind: "approve" | "deny"; project_id: string; action_id: string; request_id: string; fingerprint: string } |
   { kind: "review"; project_id: string; dossier_hash: string; quote_cents: number; cost_proof_id: string } |
@@ -76,7 +77,7 @@ export function assertPreparationCapacity(s: AllocationSources, projects: Prepar
 }
 function projection(state: PreparationState, now: string, missing: string[], stopped = false) {
   const projects = state.projects.map(p => {
-    const blockers = [...preparationBlockers(p, now), ...(p.accounting_transfer ? ["ACCOUNTING_TRANSFER_ONLY_EXECUTION_FORBIDDEN"] : state.supervision ? ["ATOMIC_HANDOVER_NOT_IMPLEMENTED"] : []), ...(stopped ? ["EMERGENCY_STOP"] : []), ...(missing.some(m => m.startsWith(p.dossier.opportunity_id + ":")) ? ["MISSING_EVIDENCE"] : [])];
+    const blockers = [...preparationBlockers(p, now), ...accountPreparationBlockers(p, state.seller_accounts, now), ...(p.accounting_transfer ? ["ACCOUNTING_TRANSFER_ONLY_EXECUTION_FORBIDDEN"] : state.supervision ? ["ATOMIC_HANDOVER_NOT_IMPLEMENTED"] : []), ...(stopped ? ["EMERGENCY_STOP"] : []), ...(missing.some(m => m.startsWith(p.dossier.opportunity_id + ":")) ? ["MISSING_EVIDENCE"] : [])];
     const total = (kind: string, phase?: string) => integerCents(p.declarations.filter(r => r.kind === kind && (!phase || r.phase === phase)).reduce((s, r) => s + r.amount_cents, 0));
     return { ...p, technical_readiness: "PREPARED_OFFLINE", commercial_validation: p.commercial_review ? "HUMAN_DOCUMENTED_REVIEW_NOT_BANK_VERIFICATION" : "REQUIRES_HUMAN_VERIFICATION",
       human_authorization: p.requests.every(r => r.status === "approved") && now < p.dossier.review_expires_at ? "APPROVED_FOR_EXACT_MANUAL_ACTIONS_ONLY" : "NOT_CURRENTLY_APPROVED",
@@ -137,6 +138,7 @@ export async function runPilotPreparation(options: { root?: string; command: Pre
     if (command.kind === "review" || command.kind === "approve" || command.kind === "deny" || command.kind === "declare") {
       const project = state.projects.find(p => p.project_id === command.project_id);
       if (!project) throw new Error("Exact prepared project required");
+      if (command.kind !== "deny" && accountPreparationBlockers(project, state.seller_accounts, now).length) throw new Error("ACCOUNT_VALIDATION_NOT_CURRENT");
       if (project.accounting_transfer) throw new Error("Transferred project is accounting-only; no further preparation writes");
       if (state.supervision && command.kind === "declare" && (preparationBlockers(project, now).length || missing.some(m => m.startsWith(project.dossier.opportunity_id + ":")))) throw new Error("Current exact authorization and evidence required for supervised declaration");
       if (command.kind !== "declare" && (now >= project.dossier.review_expires_at || missing.some(m => m.startsWith(project.dossier.opportunity_id + ":")))) throw new Error("Expired approval or missing evidence");
@@ -197,6 +199,8 @@ export async function preparationControlView(root: string) {
  * V12.8 and the Control API; does not silently renew or initialize anything. */
 export async function readPreparationSnapshot(root: string, now: string, stopped = false) {
   time(now);
+  const { assertAccountWitness } = await import("./seller-account-store.js");
+  await assertAccountWitness(root);
   const loaded = await loadPreparation(root);
   if (!loaded.state || !loaded.key) throw new Error("Prepare the V12.7 batch explicitly first");
   const state = loaded.state, raw = await readConfined(root, "pilot-preparation-input.json", 128 * 1024);

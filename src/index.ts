@@ -18,6 +18,10 @@ const VERSION = "0.12.5";
 const HELP = `Scout V12.5 Control API (local-only) v${VERSION}
 
 Usage:
+  SCOUT_MODE=seller-account automaton --initialize | --inspect | --recover
+  SCOUT_MODE=seller-account automaton --declare | --new-declaration OPERATOR_ID OPPORTUNITY_ID DOSSIER_HASH PLATFORM
+  SCOUT_MODE=seller-account automaton --validate | --deny | --revoke | --admit OPERATOR_ID ACCOUNT_ID REQUEST_ID FINGERPRINT
+  V14.3 human account attestation for preparation only; no login, network or execution.
   SCOUT_MODE=economic-handover automaton --inspect | --recover
   SCOUT_MODE=economic-handover automaton --prepare PROJECT_ID DOSSIER_HASH
   SCOUT_MODE=economic-handover automaton --approve | --deny | --transfer PROJECT_ID DOSSIER_HASH REQUEST_ID FINGERPRINT
@@ -125,6 +129,9 @@ Environment:
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "seller-account") {
+    const { runSellerAccountCli } = await import("./agent/seller-account.js"); await runSellerAccountCli(args); return;
+  }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "economic-handover") {
     const { runHandoverCli } = await import("./agent/economic-handover.js"); await runHandoverCli(args); return;
   }
