@@ -20,7 +20,11 @@ export function exactResearch(value: unknown, fields: readonly string[]): Record
 export function researchText(value: unknown, max = 240): string {
   if (typeof value !== "string" || !value.trim() || value.length > max || /[\p{Cc}\p{Cf}]/u.test(value) ||
       /(?:https?|file):|[<>]|\b(?:token|bearer|password|credential|cvv|wallet|seed phrase|economic-ledger|read_file|write_file)\b|[a-z0-9_+/-]{32,}/i.test(value)) throw new Error("Invalid public research text");
-  return value.trim();
+  const cleaned = value.trim();
+  // Reject observed example fillers without treating format validity as economic quality.
+  if (/^(?:short(?:\s+(?:name|risk|test|uncertainty|summary|description))?|why this deserves attention)$/i.test(cleaned))
+    throw new Error("Public research placeholder refused");
+  return cleaned;
 }
 export function researchInteger(value: unknown, max: number, min = 0): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || Object.is(value, -0) || value < min || value > max) throw new Error("Invalid research integer");

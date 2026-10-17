@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 import { guardQuery, containsKnownPrivate, QUERY_PROVENANCE } from "../agent/query-guard.js";
 import { CAPABILITY_REGISTRY, parseCapabilityDefinition, capability } from "../agent/capability-registry.js";
 import { parseToolRequest, attentionItem, buildAttentionItems, ATTENTION_CATEGORIES } from "../agent/tool-discovery.js";
-import { parseIntents, reconstructQuery, publicResearchMission, parseResearchCandidates, parseOpportunityPhases, RESEARCH_LIMITS, PUBLIC_RESEARCH_MISSION, assertResearchExecutable } from "../agent/research-model.js";
+import { parseIntents, reconstructQuery, publicResearchMission, parseResearchCandidates, parseOpportunityPhases, researchText, RESEARCH_LIMITS, PUBLIC_RESEARCH_MISSION, assertResearchExecutable } from "../agent/research-model.js";
 import { controlledResearch, localResearchModel, researchReport, runResearchScout } from "../agent/research-controller.js";
 import { SafeWebClient, nativeWebTransport, BRAVE_ENDPOINT, WEB_LIMITS } from "../scout-web/network.js";
 import { BraveSearchProvider, configuredSearchProvider, UnavailableSearchProvider } from "../scout-web/search.js";
@@ -64,6 +64,150 @@ describe("V11.1 public proposal contracts and provenance", () => {
   it("default public mission is valid without private files", () => expect(publicResearchMission()).toBe(PUBLIC_RESEARCH_MISSION));
   it.each(["/home/private business", "bearer abc", "cookie abc", "", "a".repeat(1001)])("rejects private public mission %s", value => expect(() => publicResearchMission(value)).toThrow());
   it("allows an explicit bounded long public mission", () => expect(publicResearchMission("France idées de services publics. ".repeat(20))).toContain("services"));
+});
+
+describe("V14.5 public research placeholder guard", () => {
+  it.each(["short", "SHORT", " short ", "short name", "short risk", "short test", "short uncertainty", "short summary", "short description", "why this deserves attention"])(
+    "rejects benchmark-observed filler %s", value => expect(() => researchText(value)).toThrow("Public research placeholder refused")
+  );
+  it.each(["Demande inconnue en l'absence d'études", "Un test gratuit sans achat peut évaluer les besoins", "Risque de frais supérieurs au plafond de 10 EUR", "short stories proofreading", "Un format short pour présenter un service"])(
+    "preserves useful concise uncertainty %s", value => expect(researchText(value)).toBe(value)
+  );
+  it("rejects filler candidate names but permits evidence-free abstention", () => {
+    expect(() => parseResearchCandidates(JSON.stringify({ candidates: [
+      { name: "short name", kind: "DURABLE_ASSET", source_index: 0 },
+    ] }), 1)).toThrow("Public research placeholder refused");
+    expect(parseResearchCandidates('{"candidates":[]}', 0)).toEqual([]);
+  });
+  it.each([
+    ["economics", "summary", "short"],
+    ["evidence", "market", "short"], ["evidence", "platform", "short"], ["evidence", "fees", "short uncertainty"],
+    ["risks", "risks", ["short risk"]], ["risks", "reason_surfaced", "why this deserves attention"],
+    ["risks", "mini_test_description", "short test"],
+  ])("rejects %s.%s filler through the research pipeline", async (phaseToCorrupt, field, filler) => {
+    const model = fixtureModel();
+    model.ask.mockImplementation(async (phase: string, data: string) => {
+      const value = JSON.parse(phaseResponse(phase, data));
+      if (phase === phaseToCorrupt) value[field as string] = filler;
+      return JSON.stringify(value);
+    });
+    const result = await research({ model });
+    expect(result.opportunities).toEqual([]);
+    expect(result.metrics.rejected_model_outputs).toBeGreaterThan(0);
+    expect(Object.values(result.security).every(flag => flag === false)).toBe(true);
+  });
+  it("prompts require bounded specific analysis instead of short examples", async () => {
+    const model = fixtureModel();
+    await research({ model });
+    const prompts = model.ask.mock.calls;
+    for (const phase of ["economics", "evidence", "risks", "tool_request"]) {
+      const text = prompts.find(([name]) => name === phase)?.[1] as string | undefined;
+      expect(text).toContain("240");
+      expect(text).not.toContain('"summary":"short"');
+      expect(text).not.toContain('"market":"short"');
+      expect(text).not.toContain('"short risk"');
+      expect(text).not.toContain('"mini_test_description":"short test"');
+      expect(text).not.toContain(':"short"');
+    }
+  });
+  it.each(["suggested_tool", "purpose", "project_relevance", "expected_benefit"])("rejects filler tool field %s without granting a capability", async field => {
+    const model = fixtureModel();
+    model.ask.mockImplementation(async (phase: string, data: string) => {
+      const value = JSON.parse(phaseResponse(phase, data));
+      if (phase === "tool_request") value[field] = "short";
+      return JSON.stringify(value);
+    });
+    const result = await research({ model });
+    expect(result.opportunities).toHaveLength(2);
+    expect(result.tool_requests).toEqual([]);
+    expect(result.metrics.rejected_model_outputs).toBe(1);
+    expect(Object.values(result.security).every(flag => flag === false)).toBe(true);
+  });
+  it("preserves unknown costs, demand, distribution and fees without treating them as zero or sales", async () => {
+    const model = fixtureModel();
+    model.ask.mockImplementation(async (phase: string, data: string) => {
+      const value = JSON.parse(phaseResponse(phase, data));
+      if (phase === "economics") Object.assign(value, { estimated_cost_cents: null, cost_basis: "UNKNOWN" });
+      if (phase === "evidence") Object.assign(value, { market: "Demande inconnue sans test", platform: "Distribution à vérifier", fees: "Frais inconnus" });
+      if (phase === "risks") Object.assign(value, { mini_test_possible: false, mini_test_cost_cents: null, mini_test_description: "Faisabilité du test inconnue" });
+      return JSON.stringify(value);
+    });
+    const result = await research({ model });
+    expect(result.opportunities).toHaveLength(2);
+    for (const opportunity of result.opportunities) {
+      expect(opportunity).toMatchObject({ classification: "COST_UNCONFIRMED", estimated_cost_cents: null, cost_basis: "UNKNOWN",
+        budget_excess_cents: null, market: "Demande inconnue sans test", fees: "Frais inconnus", execution_authorized: false,
+        mini_test: { possible: false, estimated_cost_cents: null } });
+      expect(() => assertResearchExecutable(opportunity)).toThrow("Research grants no execution authority");
+    }
+    expect(result.metrics.rejected_model_outputs).toBe(0);
+    expect(researchReport(result)).toContain("20 EUR, deux projets de 10 EUR");
+  });
+  it("keeps the production Ollama request bounded and leaves thinking at its normal default", async () => {
+    const calls: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: any) => {
+      const body = JSON.parse(init.body); calls.push(body);
+      const phase = body.messages[0].content.match(/research ([a-z_]+)/)[1];
+      return new Response(JSON.stringify({ message: { content: phaseResponse(phase, body.messages[1].content) } }));
+    }));
+    const result = await research({ model: localResearchModel("http://127.0.0.1:11434") });
+    expect(result.opportunities).toHaveLength(2);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const body of calls) {
+      expect(body).not.toHaveProperty("think"); expect(body.options).not.toHaveProperty("think");
+      expect(body.options.num_predict).toBeLessThanOrEqual(256);
+      expect(body.messages).toHaveLength(2); expect(body.tools).toBeUndefined();
+      expect(body.messages[0].content).toContain("Keep unknown costs and demand unknown");
+      expect(body.messages[0].content).toContain("UNTRUSTED DATA");
+    }
+  });
+});
+
+describe("V14.5 unchanged evidence, length and security contracts", () => {
+  const candidate = { name: "Correction de textes", kind: "QUICK_SERVICE" as const, source_index: 0 };
+  const literal = "Preuve publique de coût gratuit et de demande inconnue. ".repeat(4);
+  const parse = (economics = {}, evidence = {}, risks = {}) => parseOpportunityPhases(candidate,
+    JSON.stringify({ ...JSON.parse(phaseResponse("economics", "")), ...economics }),
+    JSON.stringify({ ...JSON.parse(phaseResponse("evidence", "")), ...evidence }),
+    JSON.stringify({ ...JSON.parse(phaseResponse("risks", "")), ...risks }),
+    [{ source_id: "source-1", url: "https://example.com/0", text: QUICK_QUOTE + literal, query_id: "query-1", round: 1 }], 0);
+  it.each([80, 160, 180, 240])("retains the exact %s character boundary", max => {
+    const value = "texte ".repeat(50).slice(0, max);
+    expect(researchText(value, max)).toBe(value.trim());
+    expect(() => researchText(value + "x", max)).toThrow("Invalid public research text");
+  });
+  it.each([
+    ["economics", "summary", 240], ["evidence", "market", 240], ["evidence", "platform", 240], ["evidence", "fees", 240],
+    ["risks", "reason_surfaced", 240], ["risks", "mini_test_description", 240], ["risks", "risks", 160],
+  ] as const)("rejects overlong %s.%s through opportunity parsing", (phase, field, max) => {
+    const value = "texte ".repeat(50).slice(0, max + 1);
+    const override = { [field]: field === "risks" ? [value] : value };
+    expect(() => parse(phase === "economics" ? override : {}, phase === "evidence" ? override : {}, phase === "risks" ? override : {})).toThrow("Invalid public research text");
+  });
+  it("keeps candidate names bounded at 80 characters", () => {
+    const name = "nom ".repeat(20);
+    expect(parseResearchCandidates(JSON.stringify({ candidates: [{ ...candidate, name }] }), 1)[0].name).toBe(name.trim());
+    expect(() => parseResearchCandidates(JSON.stringify({ candidates: [{ ...candidate, name: name + "x" }] }), 1)).toThrow();
+  });
+  it("requires an exact read-page quotation of 16 to 180 characters", () => {
+    const quote = literal.slice(0, 180);
+    expect(parse({}, { quote }).evidence.quote).toBe(quote.trim());
+    for (const invalid of [literal.slice(0, 15), literal.slice(0, 181), QUICK_QUOTE.replace("gratuit", "payant")])
+      expect(() => parse({}, { quote: invalid })).toThrow();
+  });
+  it.each([{ estimated_cost_cents: 0, cost_basis: "UNKNOWN" }, { estimated_cost_cents: null, cost_basis: "ASSUMPTION" },
+    { estimated_cost_cents: 1, cost_basis: "SOURCE_ESTIMATE" }, { estimated_cost_cents: 10001, cost_basis: "ASSUMPTION" }])(
+    "rejects invented costs and inconsistent unknowns %j", economics => expect(() => parse(economics)).toThrow()
+  );
+  it.each(["https://example.com", "bearer abc", "read_file", "texte\npublic", "texte\u200bpublic", "<script>"])(
+    "retains unsafe public-text rejection %s", value => expect(() => researchText(value)).toThrow("Invalid public research text")
+  );
+  it.each([
+    [{ execution_authorized: true }, {}, {}], [{}, { extra: "field" }, {}], [{}, {}, { approval_created: true }],
+    [{ account_required: "false" }, {}, {}], [{}, {}, { mini_test_cost_cents: 1001 }],
+  ])("keeps strict fields, flags and the 10 EUR mini-test ceiling", (economics, evidence, risks) => {
+    expect(() => parse(economics, evidence, risks)).toThrow();
+  });
 });
 
 describe("V11.1 Brave fixed provider", () => {
