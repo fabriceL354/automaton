@@ -150,6 +150,13 @@ async function main(): Promise<void> {
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "pilot-preparation") {
     const { runPreparationCli } = await import("./agent/pilot-preparation.js"); await runPreparationCli(args); return;
   }
+  if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "coordination-preview") {
+    const { runCoordinationPreview } = await import("./agent/coordination-preview.js");
+    const result = await runCoordinationPreview(args);
+    console.log(JSON.stringify(result, null, 2));
+    if (result.status !== "PASS") process.exitCode = 2;
+    return;
+  }
   if (!["--help", "-h", "--version", "-v"].includes(args[0]) && process.env.SCOUT_MODE === "pilot-dry-run") {
     try { const { runPilotCli } = await import("./agent/pilot-dry-run.js"); await runPilotCli(args); }
     catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }

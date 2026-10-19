@@ -112,6 +112,9 @@ export function createLocalWorkspaceTools(root = scoutWorkspaceRoot()): Automato
         if (/^\.?external(?:[.-]|$)/i.test(path.basename(path.resolve(root, args.path)))) {
           return "ERROR: external action files are runtime-controlled";
         }
+        if (/^\.?coordination-preview(?:[.-]|$)/i.test(path.basename(path.resolve(root, args.path)))) {
+          return "ERROR: coordination preview files are runtime-controlled";
+        }
         if (/^\.?approval(?:[.-]|$)/i.test(path.basename(path.resolve(root, args.path)))) {
           return "ERROR: approval files are runtime-controlled";
         }
