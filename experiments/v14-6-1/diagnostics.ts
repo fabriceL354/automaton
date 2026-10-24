@@ -1,8 +1,9 @@
 /** Observes localResearchModel without changing request/response bytes or errors. Sequential benchmark only. */
+import { candidateFieldIssues, diagnosticContext, type DiagnosticContext, type FieldIssue } from './candidate-diagnostics.js';
 import type { ResearchModel } from '../../src/agent/research-controller.js';
 import { exactResearch, parseIntents, parseResearchCandidates, researchText } from '../../src/agent/research-model.js';
 export type Diagnostic = { phase: string; input_chars: number; request_bytes: number | null; duration_ms: number;
-  json_valid: boolean; contract_shape_valid: boolean; diagnostic: string;
+  json_valid: boolean; contract_shape_valid: boolean; diagnostic: string; field_issues: FieldIssue[];
   prompt_tokens: number | null; output_tokens: number | null; ollama_total_ns: number | null };
 const FIELDS: Record<string, string[]> = {
   economics: ['summary', 'estimated_cost_cents', 'cost_basis', 'human_minutes_daily', 'account_required'],
@@ -10,12 +11,17 @@ const FIELDS: Record<string, string[]> = {
   risks: ['risks', 'reason_surfaced', 'mini_test_possible', 'mini_test_cost_cents', 'mini_test_description'],
   tool_selection: ['capabilities'],
 };
-export function diagnoseContent(phase: string, raw: string): Pick<Diagnostic, 'json_valid' | 'contract_shape_valid' | 'diagnostic'> {
-  if (!raw.trim()) return { json_valid: false, contract_shape_valid: false, diagnostic: 'EMPTY_CONTENT' };
+export function diagnoseContent(phase: string, raw: string, context: DiagnosticContext = {}): Pick<Diagnostic, 'json_valid' | 'contract_shape_valid' | 'diagnostic' | 'field_issues'> {
+  if (!raw.trim()) return { json_valid: false, contract_shape_valid: false, diagnostic: 'EMPTY_CONTENT', field_issues: [] };
   let x: unknown;
-  try { x = JSON.parse(raw); } catch { return { json_valid: false, contract_shape_valid: false, diagnostic: 'JSON_INVALID' }; }
+  try { x = JSON.parse(raw); } catch { return { json_valid: false, contract_shape_valid: false, diagnostic: 'JSON_INVALID', field_issues: [] }; }
+  const field_issues = phase === 'candidates' ? candidateFieldIssues(x, context) : [];
   try {
-    if (phase === 'query_proposal') parseIntents(raw, 10);
+    if (phase === 'query_proposal') {
+      const intents = parseIntents(raw, 10);
+      if (context.queryWithoutEvidence && intents.some(i => i.evidence_index !== null))
+        field_issues.push({ field: 'evidence_index', category: 'SOURCE_NOT_SUPPLIED' });
+    }
     else if (phase === 'candidates') parseResearchCandidates(raw, 10);
     else if (FIELDS[phase]) {
       const d = exactResearch(x, FIELDS[phase]);
@@ -23,23 +29,25 @@ export function diagnoseContent(phase: string, raw: string): Pick<Diagnostic, 'j
         if (Object.hasOwn(d, field)) researchText(d[field], field === 'quote' ? 180 : 240);
       if (Array.isArray(d.risks)) d.risks.forEach(value => researchText(value, 160));
     }
-    return { json_valid: true, contract_shape_valid: true, diagnostic: 'SHAPE_ONLY_NOT_ECONOMIC_VALIDATION' };
+    return { json_valid: true, contract_shape_valid: true, diagnostic: field_issues.some(i => i.category === 'SOURCE_NOT_SUPPLIED') ? 'PROVENANCE_INVALID' :
+      field_issues.length ? 'EXTRACTION_CONTRACT_INVALID' : 'SHAPE_ONLY_NOT_ECONOMIC_VALIDATION', field_issues };
   } catch (e) {
     // Match only our own validator's static errors, never retain an arbitrary message.
     const placeholder = e instanceof Error && e.message === 'Public research placeholder refused';
-    return { json_valid: true, contract_shape_valid: false, diagnostic: placeholder ? 'PLACEHOLDER' : 'SCHEMA_INVALID' };
+    return { json_valid: true, contract_shape_valid: false, diagnostic: placeholder ? 'PLACEHOLDER' : 'SCHEMA_INVALID', field_issues };
   }
 }
 export function observeModel(inner: ResearchModel, rows: Diagnostic[], rejectTruncated = false): ResearchModel {
   return { async ask(phase, data, signal) {
     const row: Diagnostic = { phase, input_chars: data.length, request_bytes: null, duration_ms: 0, json_valid: false,
-      contract_shape_valid: false, diagnostic: 'MODEL_UNAVAILABLE', prompt_tokens: null, output_tokens: null, ollama_total_ns: null };
+      contract_shape_valid: false, diagnostic: 'MODEL_UNAVAILABLE', field_issues: [], prompt_tokens: null, output_tokens: null, ollama_total_ns: null };
+    contexts.set(row, diagnosticContext(phase, data));
     rows.push(row); const start = performance.now();
     try {
       const raw = await inner.ask(phase, data, signal);
-      const content = diagnoseContent(phase, raw);
+      const content = diagnoseContent(phase, raw, contexts.get(row));
       if (row.diagnostic === 'MODEL_UNAVAILABLE') Object.assign(row, content);
-      else { row.json_valid = content.json_valid; row.contract_shape_valid = content.contract_shape_valid; }
+      else { row.json_valid = content.json_valid; row.contract_shape_valid = content.contract_shape_valid; row.field_issues = content.field_issues; }
       if (rejectTruncated && row.diagnostic === 'TRUNCATED_OR_TOKEN_LIMIT') throw new Error('Incomplete local response');
       return raw;
     } catch (error) {
@@ -50,6 +58,7 @@ export function observeModel(inner: ResearchModel, rows: Diagnostic[], rejectTru
     finally { row.duration_ms = Math.round(performance.now() - start); }
   } };
 }
+const contexts = new WeakMap<Diagnostic, DiagnosticContext>();
 const transportSignals = new WeakMap<Diagnostic, AbortSignal>();
 let observing = false;
 /** Only numbers/enums escape this function. Neither prompts, responses nor error bodies are journaled. */
@@ -95,7 +104,7 @@ export async function withOllamaMetrics<T>(rows: Diagnostic[], operation: () => 
             if (value.error) row.diagnostic = 'OLLAMA_ERROR';
             else if (value.done === false || value.done_reason === 'length') row.diagnostic = 'TRUNCATED_OR_TOKEN_LIMIT';
             else if (typeof value.message?.content !== 'string') row.diagnostic = 'ENVELOPE_INVALID';
-            else Object.assign(row, diagnoseContent(row.phase, value.message.content));
+            else Object.assign(row, diagnoseContent(row.phase, value.message.content, contexts.get(row)));
           } catch { row.diagnostic = 'ENVELOPE_JSON_INVALID'; }
         },
       }));

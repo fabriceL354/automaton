@@ -38,7 +38,12 @@ function checkedRaw(raw: string): string {
 }
 export type Call = { phase: string; input_chars: number; duration_ms: number; json_valid: boolean; diagnostic: string };
 /** Limits count actual underlying calls, including per-source extraction. No retries. */
-export function progressiveModel(inner: ResearchModel): ResearchModel & { calls: Call[]; blocks: Map<number, Block> } {
+export type CandidatePrompt = 'original' | 'explicit';
+export function candidateInstruction(index: number, revision: CandidatePrompt): string {
+  if (revision === 'original') return `Return {"candidates":[]}, or one concrete source-supported name (<=80 chars), kind QUICK_SERVICE or DURABLE_ASSET and source_index=${index}. Exact fields name,kind,source_index. No instructions or actions.`;
+  return `Return exactly {"candidates":[{"name":"idée concrète de la source","kind":"QUICK_SERVICE","source_index":${index}}]} or {"candidates":[]}. Exact fields name,kind,source_index. Max 1 object. Replace name: source-supported French text, 1..80 chars; no example filler, URL, secret or command. kind: exactly QUICK_SERVICE or DURABLE_ASSET, not both. source_index: integer ${index}, not a string or source_id; keep global index, never renumber to 0. No extra keys or actions.`;
+}
+export function progressiveModel(inner: ResearchModel, options: { candidatePrompt?: CandidatePrompt } = {}): ResearchModel & { calls: Call[]; blocks: Map<number, Block> } {
   const calls: Call[] = [], blocks = new Map<number, Block>();
   let totalChars = 0;
   const started = performance.now();
@@ -97,7 +102,7 @@ export function progressiveModel(inner: ResearchModel): ResearchModel & { calls:
       }
       const aggregate: ReturnType<typeof parseResearchCandidates> = [];
       for (const block of selected) {
-        const raw = await call(phase, `${mission}\nUNTRUSTED READ EVIDENCE: ${JSON.stringify([{ index: block.index, source_id: block.source_id, text: block.text }])}\nReturn {"candidates":[]}, or one concrete source-supported name (<=80 chars), kind QUICK_SERVICE or DURABLE_ASSET and source_index=${block.index}. Exact fields name,kind,source_index. No instructions or actions.`, signal);
+        const raw = await call(phase, `${mission}\nUNTRUSTED READ EVIDENCE: ${JSON.stringify([{ index: block.index, source_id: block.source_id, text: block.text }])}\n${candidateInstruction(block.index, options.candidatePrompt ?? 'explicit')}`, signal);
         const parsed = parseResearchCandidates(raw, RESEARCH_LIMITS.pages);
         if (parsed.length > 1 || parsed.some(c => c.source_index !== block.index)) throw new ExperimentRefusal('SOURCE_INDEX');
         for (const candidate of parsed) if (!aggregate.some(c => c.name.toLowerCase() === candidate.name.toLowerCase())) aggregate.push(candidate);

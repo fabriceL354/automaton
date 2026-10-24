@@ -8,7 +8,7 @@ import { loadLocalScoutSettings, DEFAULT_SCOUT_MODEL } from '../../src/agent/loc
 import { SafeWebClient, type WebTransport, type HttpReply } from '../../src/scout-web/network.js';
 import type { SearchProvider } from '../../src/scout-web/search.js';
 import { coordinatePreview } from '../../src/agent/coordination-preview.js';
-import { progressiveModel } from './progressive.js';
+import { progressiveModel, type CandidatePrompt } from './progressive.js';
 import { observeModel, withOllamaMetrics, type Diagnostic } from './diagnostics.js';
 import { SCENARIOS, QUICK, ASSET, PRICE } from './corpus.js';
 export type Scenario = typeof SCENARIOS[number];
@@ -59,10 +59,10 @@ export function scriptedModel(scenario: Scenario): ResearchModel {
     throw new Error('Unexpected scripted phase');
   } };
 }
-export async function runArm(scenario: Scenario, variant: 'A' | 'B', inner: ResearchModel, real = false) {
+export async function runArm(scenario: Scenario, variant: 'A' | 'B', inner: ResearchModel, real = false, candidatePrompt: CandidatePrompt = 'explicit') {
   const rows: Diagnostic[] = [];
   const observed = observeModel(inner, rows, variant === 'B');
-  const progressive = variant === 'B' ? progressiveModel(observed) : undefined;
+  const progressive = variant === 'B' ? progressiveModel(observed, { candidatePrompt }) : undefined;
   const started = performance.now();
   const operation = () => controlledResearch({ model: progressive ?? observed, ...frozenNetwork(scenario) });
   const research = real ? await withOllamaMetrics(rows, operation, { progressiveContext: variant === 'B' }) : await operation();
@@ -75,7 +75,7 @@ export async function runArm(scenario: Scenario, variant: 'A' | 'B', inner: Rese
     prior.calls++; prior.duration_ms += row.duration_ms; counts.set(row.phase, prior); }
   const fullyKnown = (field: 'prompt_tokens' | 'output_tokens') => rows.length && rows.every(r => r[field] !== null)
     ? rows.reduce((n, r) => n + r[field]!, 0) : null;
-  return { scenario: scenario.id, variant, measurement: real ? 'REAL_LOCAL_OLLAMA_SYNTHETIC_CORPUS' : 'SCRIPTED_FAULT_TEST_NOT_MODEL_PERFORMANCE',
+  return { scenario: scenario.id, variant, candidate_prompt: variant === 'B' ? candidatePrompt : 'production', measurement: real ? 'REAL_LOCAL_OLLAMA_SYNTHETIC_CORPUS' : 'SCRIPTED_FAULT_TEST_NOT_MODEL_PERFORMANCE',
     status: research.status, reason: research.reason, total_ms: Math.round(performance.now() - started),
     phase_model_times: Object.fromEntries(counts), model_calls: rows.length,
     input_chars: rows.reduce((n, r) => n + r.input_chars, 0), max_input_chars: Math.max(0, ...rows.map(r => r.input_chars)),
@@ -100,7 +100,9 @@ export async function runArm(scenario: Scenario, variant: 'A' | 'B', inner: Rese
 }
 async function main() {
   const args = process.argv.slice(2);
-  if (args.some(a => !/^(?:--ollama|--repetitions=[1-3]|--scenario=[a-z-]+|--output=.+)$/.test(a))) throw new Error('Unsupported argument');
+  if (args.some(a => !/^(?:--ollama|--repetitions=[1-3]|--scenario=[a-z-]+|--candidate-prompt=(?:original|explicit)|--variant=[AB]|--output=.+)$/.test(a))) throw new Error('Unsupported argument');
+  const candidatePrompt = (args.find(a => a.startsWith('--candidate-prompt='))?.slice(19) ?? 'explicit') as CandidatePrompt;
+  const selectedVariant = args.find(a => a.startsWith('--variant='))?.slice(10);
   const real = args.includes('--ollama');
   const repetitions = Number(args.find(a => a.startsWith('--repetitions='))?.split('=')[1] ?? 3);
   const selected = args.find(a => a.startsWith('--scenario='))?.slice(11);
@@ -111,16 +113,17 @@ async function main() {
   // Fixed loopback and model, no external services or config/private-file loading.
   const settings = loadLocalScoutSettings();
   const model = real ? localResearchModel('http://127.0.0.1:11434', DEFAULT_SCOUT_MODEL) : undefined;
-  const report = { experiment: '14.6.1-PREPARATORY-NOT-INTEGRATED', base_commit: '34fdac2cbdf8d582c5e3563538d3adbd246d2d0c',
+  const report = { experiment: '14.6.1-ITERATION-2-NOT-INTEGRATED', parent_commit: '1998a24e2bbd12d46d5f8f8ef6bd0a3ad9db3287', candidate_prompt: candidatePrompt, base_commit: '34fdac2cbdf8d582c5e3563538d3adbd246d2d0c',
     created_at: new Date().toISOString(), corpus_sha256: createHash('sha256').update(JSON.stringify(SCENARIOS)).digest('hex'),
     model: real ? DEFAULT_SCOUT_MODEL : null, settings, inference: { temperature: 0, num_predict: Math.min(256, settings.numPredict), format: 'json', fresh_two_messages: true, B_context_guard: 'UTF8 text bytes + 128 framing reserve + num_predict <= num_ctx; compact system; query proposals see no page evidence' },
     hardware: { node: process.version, ram_bytes: totalmem(), logical_cpus: cpus().length },
-    live_web: false, synthetic_sources: true, real_model_executed: real, repetitions,
+    live_web: false, synthetic_sources: true, real_model_requested: real, real_model_executed: false, repetitions,
     order: 'AB then BA on alternating repetitions; no warmup excluded', results: [] as (Awaited<ReturnType<typeof runArm>> & { repetition: number })[] };
   for (let repetition = 1; repetition <= repetitions; repetition++) for (const scenario of scenarios)
-    for (const variant of (repetition % 2 ? ['A', 'B'] : ['B', 'A']) as ('A' | 'B')[]) {
-      const result = await runArm(scenario, variant, model ?? scriptedModel(scenario), real);
+    for (const variant of (repetition % 2 ? ['A', 'B'] : ['B', 'A']).filter(v => !selectedVariant || v === selectedVariant) as ('A' | 'B')[]) {
+      const result = await runArm(scenario, variant, model ?? scriptedModel(scenario), real, candidatePrompt);
       report.results.push({ repetition, ...result });
+      report.real_model_executed ||= real && result.calls.some(row => row.json_valid || row.output_tokens !== null);
       await writeFile(output + '.pending', JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
       await rename(output + '.pending', output);
       console.log(`${scenario.id} ${variant} repetition=${repetition} ${result.status} calls=${result.model_calls} ms=${result.total_ms}`);
