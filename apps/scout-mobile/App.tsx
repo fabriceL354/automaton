@@ -1,6 +1,8 @@
+import OpportunitiesScreen from './src/screens/OpportunitiesScreen';
 import React, { useState } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  SafeAreaView, ScrollView, View, Text,
+  ScrollView, View, Text,
   Pressable, StatusBar, StyleSheet
 } from 'react-native';
 
@@ -28,7 +30,7 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#101827" />
+      <StatusBar barStyle="light-content" />
 
       <View style={styles.header}>
         <Text style={styles.logo}>SCOUT</Text>
@@ -88,22 +90,7 @@ export default function App() {
           </>
         )}
 
-        {page === 'Opportunités' && (
-          <>
-            <Text style={styles.info}>
-              Exemples fictifs pour tester l'interface.
-            </Text>
-
-            {exemples.map(item => (
-              <View style={styles.card} key={item.titre}>
-                <Text style={styles.value}>{item.titre}</Text>
-                <Text style={styles.info}>{item.categorie}</Text>
-                <Text style={styles.info}>Coût : {item.cout}</Text>
-                <Text style={styles.badge}>{item.statut}</Text>
-              </View>
-            ))}
-          </>
-        )}
+        {page === 'Opportunités' && <OpportunitiesScreen />}
 
         {page === 'Projets' && (
           <View style={styles.card}>
