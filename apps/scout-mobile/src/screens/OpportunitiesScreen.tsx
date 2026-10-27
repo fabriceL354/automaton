@@ -1,5 +1,6 @@
 import OpportunityEditor from './OpportunityEditor';
 import { describeResearchBudget } from '../domain/researchBudget';
+import { describeDeclaredEvidence } from '../domain/declaredEvidence';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator, Alert, Pressable,
@@ -216,6 +217,14 @@ export default function OpportunitiesScreen() {
                 Sources déclarées : {item.sources}
               </Text>
             ) : null}
+
+            <Text style={s.note}>
+              Diagnostic des preuves :
+              {' '}{describeDeclaredEvidence(
+                item.sources,
+                item.cost_cents
+              )}
+            </Text>
 
             {editingId === item.id ? (
               <OpportunityEditor
