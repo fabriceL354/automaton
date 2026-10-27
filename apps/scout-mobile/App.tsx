@@ -1,4 +1,5 @@
 import OpportunitiesScreen from './src/screens/OpportunitiesScreen';
+import ResearchImportsScreen from './src/screens/ResearchImportsScreen';
 import React, { useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -89,6 +90,8 @@ export default function App() {
             </View>
           </>
         )}
+
+        {page === 'Accueil' && <ResearchImportsScreen />}
 
         {page === 'Opportunités' && <OpportunitiesScreen />}
 
