@@ -1,5 +1,6 @@
 /** Research contracts only. These artifacts cannot be consumed as V4/V9 plans. */
 import { guardQuery, type QueryProvenance } from "./query-guard.js";
+import { quoteAppearsInReadPage, quotedCostMatches } from "./research-evidence-policy.js";
 import { RESEARCH_BUDGET_CENTS, RESEARCH_HORIZON_CENTS } from "./research-budget-policy.js";
 export const RESEARCH_LIMITS = Object.freeze({ rounds: 3, queries: 6, resultsPerQuery: 5, pages: 10, toolRequests: 5,
   queryChars: 300, totalCompressedBytes: 4 * 1024 * 1024, totalDecompressedBytes: 4 * 1024 * 1024,
@@ -84,14 +85,12 @@ export function parseOpportunityPhases(candidate: ResearchCandidate, economicsRa
   const c = exactResearch(JSON.parse(risksRaw), ["risks", "reason_surfaced", "mini_test_possible", "mini_test_cost_cents", "mini_test_description"]);
   const source = sources[researchInteger(candidate.source_index, sources.length - 1)];
   const quote = researchText(b.quote, 180);
-  if (quote.length < 16 || !source.text.includes(quote)) throw new Error("Evidence must quote a page actually read");
+  if (!quoteAppearsInReadPage(source.text, quote)) throw new Error("Evidence must quote a page actually read");
   if (a.cost_basis !== "SOURCE_ESTIMATE" && a.cost_basis !== "ASSUMPTION" && a.cost_basis !== "UNKNOWN") throw new Error("Invalid cost basis");
   const cost = a.estimated_cost_cents === null ? null : researchInteger(a.estimated_cost_cents, RESEARCH_LIMITS.researchHorizonCents);
   if ((cost === null) !== (a.cost_basis === "UNKNOWN")) throw new Error("Cost uncertainty mismatch");
   if (a.cost_basis === "SOURCE_ESTIMATE") {
-    const amounts = [...quote.matchAll(/\b(\d+(?:[.,]\d{1,2})?)\s*(?:EUR|euros?|€)/gi)]
-      .map(match => Math.round(Number(match[1].replace(",", ".")) * 100));
-    if (!(cost === 0 && /gratuit|free|sans investissement/i.test(quote)) && !amounts.includes(cost!)) throw new Error("Exact cost quotation required");
+    if (!quotedCostMatches(quote, cost!)) throw new Error("Exact cost quotation required");
   }
   if (!Array.isArray(c.risks) || !c.risks.length || c.risks.length > 3) throw new Error("Invalid risks");
   const miniPossible = researchBoolean(c.mini_test_possible);
