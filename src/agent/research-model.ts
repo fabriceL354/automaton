@@ -1,10 +1,11 @@
 /** Research contracts only. These artifacts cannot be consumed as V4/V9 plans. */
 import { guardQuery, type QueryProvenance } from "./query-guard.js";
+import { RESEARCH_BUDGET_CENTS, RESEARCH_HORIZON_CENTS } from "./research-budget-policy.js";
 export const RESEARCH_LIMITS = Object.freeze({ rounds: 3, queries: 6, resultsPerQuery: 5, pages: 10, toolRequests: 5,
   queryChars: 300, totalCompressedBytes: 4 * 1024 * 1024, totalDecompressedBytes: 4 * 1024 * 1024,
   responseBytes: 256 * 1024, textPerPage: 2400, evidenceToModelChars: 4800, modelCalls: 20,
   modelResponseBytes: 16 * 1024, runTimeoutMs: 20 * 60 * 1000, candidates: 3,
-  executionBudgetCents: 1000, researchHorizonCents: 10000, supervisionMinutesDaily: 15 });
+  executionBudgetCents: RESEARCH_BUDGET_CENTS, researchHorizonCents: RESEARCH_HORIZON_CENTS, supervisionMinutesDaily: 15 });
 export const PUBLIC_RESEARCH_MISSION = "Trouve en France des expériences économiques réalisables par une seule personne avec un budget initial maximum de 10 EUR. Cherche notamment une piste de revenu rapide et une piste créant un actif numérique durable. Identifie également les outils ou capacités manquants qui pourraient améliorer les résultats.";
 export const FAMILIES = Object.freeze({ micro_service: "micro service freelance", digital_template: "template produit numérique", writing: "rédaction correction", translation: "traduction service", design: "design graphique service", tutoring: "cours particuliers", spreadsheet: "tableur modèle numérique", guide: "guide numérique" });
 export const FOCUSES = Object.freeze({ explore: "sans investissement 0 euro 10 euros", market: "demande marché clients distribution", cost: "coût frais plateforme compte requis", validate: "mini test gratuit validation 7 jours faible temps supervision" });

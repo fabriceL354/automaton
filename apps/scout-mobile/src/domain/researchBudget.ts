@@ -2,8 +2,12 @@
 // Source : src/agent/research-model.ts
 // Indicateur uniquement : aucune autorisation d'exécution.
 
-export const RESEARCH_BUDGET_CENTS = 1000;
-export const RESEARCH_HORIZON_CENTS = 10000;
+import {
+  RESEARCH_BUDGET_CENTS,
+  RESEARCH_HORIZON_CENTS
+} from '../../../../src/agent/research-budget-policy';
+
+export { RESEARCH_BUDGET_CENTS, RESEARCH_HORIZON_CENTS };
 
 export function describeResearchBudget(
   costCents: number | null
