@@ -5,6 +5,10 @@ export type Opportunity = {
   title: string;
   cost_cents: number | null;
   created_at: string;
+  description: string;
+  risks: string;
+  sources: string;
+  status: 'A_ETUDIER' | 'EN_ANALYSE' | 'REFUSEE';
 };
 
 let database: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -24,6 +28,28 @@ function getDatabase(): Promise<SQLite.SQLiteDatabase> {
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
       `);
+
+      // Migration additive : conserver les opportunites existantes.
+      const existing = await db.getAllAsync<{ name: string }>(
+        'PRAGMA table_info(opportunities)'
+      );
+
+      const columns = new Set(existing.map(row => row.name));
+
+      const additions = [
+        ['description', "TEXT NOT NULL DEFAULT ''"],
+        ['risks', "TEXT NOT NULL DEFAULT ''"],
+        ['sources', "TEXT NOT NULL DEFAULT ''"],
+        ['status', "TEXT NOT NULL DEFAULT 'A_ETUDIER'"]
+      ] as const;
+
+      for (const [column, definition] of additions) {
+        if (!columns.has(column)) {
+          await db.execAsync(
+            `ALTER TABLE opportunities ADD COLUMN ${column} ${definition}`
+          );
+        }
+      }
 
       return db;
     })().catch(error => {
@@ -82,4 +108,49 @@ export async function deleteOpportunity(id: number): Promise<void> {
     'DELETE FROM opportunities WHERE id = ?',
     id
   );
+}
+
+
+export async function updateOpportunityDetails(
+  id: number,
+  description: string,
+  risks: string,
+  sources: string,
+  status: Opportunity['status']
+): Promise<void> {
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error('INVALID_ID');
+  }
+
+  if (
+    description.length > 2000 ||
+    risks.length > 1000 ||
+    sources.length > 1500
+  ) {
+    throw new Error('TEXT_TOO_LONG');
+  }
+
+  if (!['A_ETUDIER', 'EN_ANALYSE', 'REFUSEE'].includes(status)) {
+    throw new Error('INVALID_STATUS');
+  }
+
+  const db = await getDatabase();
+
+  const result = await db.runAsync(
+    `UPDATE opportunities
+     SET description = ?,
+         risks = ?,
+         sources = ?,
+         status = ?
+     WHERE id = ?`,
+    description.trim(),
+    risks.trim(),
+    sources.trim(),
+    status,
+    id
+  );
+
+  if (result.changes !== 1) {
+    throw new Error('OPPORTUNITY_NOT_FOUND');
+  }
 }

@@ -1,3 +1,4 @@
+import OpportunityEditor from './OpportunityEditor';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator, Alert, Pressable,
@@ -17,6 +18,7 @@ export default function OpportunitiesScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   async function refresh() {
     setItems(await listOpportunities());
@@ -167,6 +169,53 @@ export default function OpportunitiesScreen() {
                       .toFixed(2).replace('.', ',') + ' €'
               }
             </Text>
+
+
+            <Text style={s.note}>
+              Statut : {
+                item.status === 'EN_ANALYSE'
+                  ? 'En analyse'
+                  : item.status === 'REFUSEE'
+                    ? 'Refusée'
+                    : 'À étudier'
+              }
+            </Text>
+
+            {item.description ? (
+              <Text style={s.note}>
+                Description : {item.description}
+              </Text>
+            ) : null}
+
+            {item.risks ? (
+              <Text style={s.note}>
+                Risques : {item.risks}
+              </Text>
+            ) : null}
+
+            {item.sources ? (
+              <Text style={s.note}>
+                Sources déclarées : {item.sources}
+              </Text>
+            ) : null}
+
+            {editingId === item.id ? (
+              <OpportunityEditor
+                item={item}
+                onCancel={() => setEditingId(null)}
+                onSaved={async () => {
+                  await refresh();
+                  setEditingId(null);
+                }}
+              />
+            ) : (
+              <Pressable
+                style={s.button}
+                onPress={() => setEditingId(item.id)}
+              >
+                <Text style={s.buttonText}>Modifier la fiche</Text>
+              </Pressable>
+            )}
 
             <Pressable
               disabled={busy}
