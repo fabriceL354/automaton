@@ -172,6 +172,18 @@ export default function OpportunitiesScreen() {
 
 
             <Text style={s.note}>
+              Fiabilité du coût : {
+                item.cost_cents === null
+                  ? 'Coût inconnu'
+                  : item.cost_basis === 'ASSUMPTION'
+                    ? 'Hypothèse manuelle — non vérifiée'
+                    : item.cost_basis === 'SOURCE_ESTIMATE'
+                      ? 'Estimation avec source déclarée — à vérifier'
+                      : 'Montant non justifié'
+              }
+            </Text>
+
+            <Text style={s.note}>
               Statut : {
                 item.status === 'EN_ANALYSE'
                   ? 'En analyse'

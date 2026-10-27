@@ -4,6 +4,7 @@ export type Opportunity = {
   id: number;
   title: string;
   cost_cents: number | null;
+  cost_basis: 'UNKNOWN' | 'ASSUMPTION' | 'SOURCE_ESTIMATE';
   created_at: string;
   description: string;
   risks: string;
@@ -40,7 +41,8 @@ function getDatabase(): Promise<SQLite.SQLiteDatabase> {
         ['description', "TEXT NOT NULL DEFAULT ''"],
         ['risks', "TEXT NOT NULL DEFAULT ''"],
         ['sources', "TEXT NOT NULL DEFAULT ''"],
-        ['status', "TEXT NOT NULL DEFAULT 'A_ETUDIER'"]
+        ['status', "TEXT NOT NULL DEFAULT 'A_ETUDIER'"],
+        ['cost_basis', "TEXT NOT NULL DEFAULT 'UNKNOWN'"]
       ] as const;
 
       for (const [column, definition] of additions) {
@@ -49,6 +51,13 @@ function getDatabase(): Promise<SQLite.SQLiteDatabase> {
             `ALTER TABLE opportunities ADD COLUMN ${column} ${definition}`
           );
         }
+      }
+
+      if (!columns.has('cost_basis')) {
+        await db.runAsync(
+          "UPDATE opportunities SET cost_basis = 'ASSUMPTION' " +
+          "WHERE cost_cents IS NOT NULL"
+        );
       }
 
       return db;
@@ -91,9 +100,10 @@ export async function addOpportunity(
   const db = await getDatabase();
 
   await db.runAsync(
-    'INSERT INTO opportunities (title, cost_cents) VALUES (?, ?)',
+    'INSERT INTO opportunities (title, cost_cents, cost_basis) VALUES (?, ?, ?)',
     name,
-    costCents
+    costCents,
+    costCents === null ? 'UNKNOWN' : 'ASSUMPTION'
   );
 }
 
