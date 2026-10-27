@@ -1,4 +1,5 @@
 import OpportunityEditor from './OpportunityEditor';
+import { describeResearchBudget } from '../domain/researchBudget';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator, Alert, Pressable,
@@ -181,6 +182,11 @@ export default function OpportunitiesScreen() {
                       ? 'Estimation avec source déclarée — à vérifier'
                       : 'Montant non justifié'
               }
+            </Text>
+
+            <Text style={s.note}>
+              Repère budgétaire Scout :
+              {' '}{describeResearchBudget(item.cost_cents)}
             </Text>
 
             <Text style={s.note}>
