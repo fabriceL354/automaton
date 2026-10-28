@@ -36,11 +36,12 @@ async function declare(kind: "declare" | "new-declaration" = "declare") {
 async function validated() { const d=await declare(), r=d.accounts.at(-1); return (await account(scopeCommand("validate",r))).accounts.at(-1); }
 async function admitted() { const r=await validated(); await account(scopeCommand("admit",r)); return r; }
 function child(c: AccountCommand) {
-  return new Promise<{code:number|null;out:string}>((resolve,reject)=>{
+  return new Promise<{code:number|null;out:string;err:string}>((resolve,reject)=>{
     const p=spawn(process.execPath,["src/__tests__/fixtures/account-child.mjs",root,JSON.stringify(c),at],{cwd:process.cwd(),env:{...process.env,SCOUT_MODE:"seller-account"},stdio:["ignore","pipe","pipe"]});
-    let out=""; p.stdout.on("data",d=>out+=d);p.stderr.on("data",d=>out+=d);
+    // stdout is JSON; keep diagnostics separate and visible on stderr.
+    let out="",err=""; p.stdout.on("data",d=>out+=d);p.stderr.on("data",d=>{err+=d;process.stderr.write(d);});
     const timer=setTimeout(()=>{p.kill("SIGKILL");reject(new Error("Child deadline exceeded"));},15000);
-    p.on("error",e=>{clearTimeout(timer);reject(e);});p.on("close",code=>{clearTimeout(timer);resolve({code,out});});
+    p.on("error",e=>{clearTimeout(timer);reject(e);});p.on("close",code=>{clearTimeout(timer);resolve({code,out,err});});
   });
 }
 beforeEach(async()=>{

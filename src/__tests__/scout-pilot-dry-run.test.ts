@@ -14,6 +14,7 @@ import { readProjectContext } from "../agent/project-manager.js";
 import { readVerifiedExternalRecords } from "../agent/external-gateway.js";
 import { readLearningSources, buildProjectEvidence } from "../agent/evidence-builder.js";
 import { controlEventStoreRoot } from "../agent/control-events.js";
+import { assertOnlyNodeStartupDiagnostics } from "./fixtures/node-startup-diagnostics.mjs";
 let temp: string, root: string, before: string, previous: string | undefined, complete: any, project: any, sources: any, events: any[], external: any[];
 export async function completePilot(root: string, initial = false, denyName?: string) {
   let result: any;
@@ -40,7 +41,9 @@ beforeAll(async () => {
       const child = spawn(process.execPath, ["src/__tests__/fixtures/pilot-crash-child.mjs", root, point], { env: { ...process.env, NODE_OPTIONS: "" }, stdio: ["ignore", "ignore", "pipe"] });
       child.stderr.on("data", data => { stderr += data; }); child.on("error", reject); child.on("exit", (code, signal) => resolve({ code, signal, stderr }));
     });
-    expect(result, point).toEqual({ code: null, signal: "SIGKILL", stderr: "" });
+    const { stderr, ...exit } = result;
+    expect(exit, point).toEqual({ code: null, signal: "SIGKILL" });
+    assertOnlyNodeStartupDiagnostics(stderr);
     const m = (await loadPilot(root))!.manifest; expect(m.pending?.key).toBeTruthy();
   }
   complete = await completePilot(root);

@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import ts from "typescript";
 import { SIMULATION_LIMITS, SIMULATION_NOTICE, simulateFictionalScenarios, type FictionalScenario } from "../agent/fictional-simulation.js";
+import { assertOnlyNodeStartupDiagnostics } from "./fixtures/node-startup-diagnostics.mjs";
 
 const base: FictionalScenario = { scenario_id: "central", budget_cents: 1000, fixed_cost_cents: 601, unit_cost_cents: 100, unit_price_cents: 300, units: 4 };
 const input = (...scenarios: unknown[]) => ({ version: "14.1", kind: "FICTIONAL_SIMULATION", currency: "EUR", scenarios });
@@ -179,7 +180,7 @@ describe("V14.1 protected state", () => {
     for (const [timezone, request] of [["UTC", input(a, z)], ["Europe/Paris", input(z, a)]] as const) {
       const result = await run(process.execPath, ["--input-type=module", "-e", script, JSON.stringify(request)],
         { env: { ...process.env, TZ: timezone, SCOUT_MODE: "learning" }, timeout: 5000 });
-      expect(result.stdout).toBe(expected); expect(result.stderr).toBe("");
+      expect(result.stdout).toBe(expected); assertOnlyNodeStartupDiagnostics(result.stderr);
     }
   });
   it("leaves a genuine V13 workspace, HMAC state, decisions and terminal stop byte-identical", async () => {

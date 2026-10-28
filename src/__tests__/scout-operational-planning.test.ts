@@ -16,6 +16,7 @@ import { pilotStopRoot } from "../agent/pilot-stop.js";
 import { canonicalHash } from "../agent/project-model.js";
 import { inMode } from "./scout-control-fixtures.js";
 import { createPreparationExample } from "../../scripts/scout-v12-7-example.mjs";
+import { assertOnlyNodeStartupDiagnostics } from "./fixtures/node-startup-diagnostics.mjs";
 
 describe("V13 pure economic simulations", () => {
   it("calculates three ordered sensitivity cases in integer cents", () => {
@@ -70,13 +71,14 @@ describe("V13 authenticated planning host", () => {
     await ready(); return p;
   }
   function child(operation = "plan", cliArgs?: string[]) {
-    return new Promise<{ code: number | null; out: string }>((resolve, reject) => {
+    return new Promise<{ code: number | null; out: string; err: string }>((resolve, reject) => {
       const p = spawn(process.execPath, cliArgs ? ["dist/index.js", ...cliArgs] : ["src/__tests__/fixtures/planning-child.mjs", root, operation], {
         cwd: process.cwd(), env: { ...process.env, SCOUT_MODE: "operational-planning" }, stdio: ["ignore", "pipe", "pipe"],
       });
-      let out = ""; p.stdout!.on("data", d => { out += d; }); p.stderr!.on("data", d => { out += d; });
+      // stdout is JSON; keep diagnostics separate and visible on stderr.
+      let out = "", err = ""; p.stdout!.on("data", d => { out += d; }); p.stderr!.on("data", d => { err += d; process.stderr.write(d); });
       const timer = setTimeout(() => { p.kill("SIGKILL"); reject(new Error("Planning child exceeded 15-second deadline")); }, 15000);
-      p.on("error", e => { clearTimeout(timer); reject(e); }); p.on("close", code => { clearTimeout(timer); resolve({ code, out }); });
+      p.on("error", e => { clearTimeout(timer); reject(e); }); p.on("close", code => { clearTimeout(timer); resolve({ code, out, err }); });
     });
   }
   beforeEach(async () => { temp = await fs.mkdtemp(path.join(os.tmpdir(), "scout-planning-test-")); root = path.join(temp, "workspace"); await createPreparationExample(root); });
@@ -232,12 +234,12 @@ describe("V13 authenticated planning host", () => {
     expect((await stop()).stopped).toBe(true);
   });
   it("shares the original lock and does not steal it", async () => {
-    await prepared(); await inMode("operational-planning", () => locked(root, async () => { const result = await child(); expect(result.code).toBe(2); expect(result.out).toContain("Ledger locked"); }, "planning"));
+    await prepared(); await inMode("operational-planning", () => locked(root, async () => { const result = await child(); expect(result.code).toBe(2); expect(result.err).toContain("Ledger locked"); }, "planning"));
     expect((await child()).code).toBe(0);
   });
   it("serializes competing processes without duplicate plans or affectations", async () => {
     await prepared(); const results = await Promise.all([child(), child()]);
-    expect(results.some(r => r.code === 0)).toBe(true); expect(results.every(r => r.code === 0 || r.code === 2 && r.out.includes("Ledger locked"))).toBe(true);
+    expect(results.some(r => r.code === 0)).toBe(true); expect(results.every(r => r.code === 0 || r.code === 2 && r.err.includes("Ledger locked"))).toBe(true);
     const r = await run({ kind: "report" }); expect(r.audit).toHaveLength(1); expect((await loadPreparation(root)).state!.projects.reduce((n, p) => n + p.reserved_budget_cents, 0)).toBe(2000);
   });
   it.each(["crash-before-rename", "crash-after-rename"])("preserves complete old or new authenticated state after %s", async operation => {
@@ -249,12 +251,12 @@ describe("V13 authenticated planning host", () => {
   });
   it("stop arriving during commit never returns permission", async () => {
     await prepared(); const ledger = await read("economic-ledger.json"), result = await child("halt-before-rename");
-    expect(result.code).toBe(2); expect(result.out).toContain("EMERGENCY_STOP");
+    expect(result.code).toBe(2); expect(result.err).toContain("EMERGENCY_STOP");
     const r = await run({ kind: "report" }); expect(r.execution_allowed).toBe(false); expect(r.emergency_stop.stopped).toBe(true); expect(await read("economic-ledger.json")).toBe(ledger);
   });
   it("persists emergency stop across processes, preserves read access and legacy sealing", async () => {
     await prepared(); await run(); const raw = await stateRaw(); expect((await child("halt")).code).toBe(0);
-    expect((await child()).out).toContain("EMERGENCY_STOP"); expect((await run({ kind: "report" })).decision_dossiers.every(p => p.blockers.includes("EMERGENCY_STOP"))).toBe(true);
+    expect((await child()).err).toContain("EMERGENCY_STOP"); expect((await run({ kind: "report" })).decision_dossiers.every(p => p.blockers.includes("EMERGENCY_STOP"))).toBe(true);
     await expect(inMode("ledger", () => runLedgerScout({ root }))).rejects.toThrow("EMERGENCY_STOP"); expect(await stateRaw()).toBe(raw);
   });
   it("stop remains usable with corrupt state and a stale lock", async () => {
@@ -276,7 +278,11 @@ describe("V13 authenticated planning host", () => {
   });
   it("rejects execution CLI routes before reading or changing any workspace", async () => {
     for (const args of [["--start"], ["--pay"], ["--publish"], ["--execute"], ["--run"], ["--resume"], ["--plan", "extra"]]) expect(() => parsePlanningCommand(args)).toThrow("PLANNING_COMMAND_FORBIDDEN");
-    const result = await child("", ["--execute"]); expect(result.code).toBe(1); expect(JSON.parse(result.out)).toMatchObject({ version: "13", execution_allowed: false, money_moved_cents: 0 });
+    const result = await child("", ["--execute"]); expect(result.code).toBe(1); expect(result.out).toBe("");
+    // This refusal is intentionally JSON on stderr, separate from Node's warning.
+    const json = result.err.split("\n").find(line => line.startsWith("{")) ?? "";
+    expect(json).not.toBe(""); assertOnlyNodeStartupDiagnostics(result.err.replace(`${json}\n`, ""));
+    expect(JSON.parse(json)).toMatchObject({ version: "13", execution_allowed: false, money_moved_cents: 0 });
   });
   it("model tools cannot forge planning artifacts", async () => {
     const tool = createLocalWorkspaceTools(root).find(t => t.name === "write_file")!;
