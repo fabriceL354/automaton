@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { File } from 'expo-file-system';
 import {
   Pressable, StyleSheet, Text, TextInput, View
 } from 'react-native';
@@ -7,11 +8,13 @@ import {
   parseMobileResearchImport,
   type ImportedPreview
 } from '../domain/mobileResearchImport';
+import { parseResearchResultFile } from '../domain/researchResultFile';
 
 export default function ResearchImportsScreen() {
   const [raw, setRaw] = useState('');
   const [preview, setPreview] = useState<ImportedPreview | null>(null);
   const [error, setError] = useState('');
+  const [importing, setImporting] = useState(false);
 
   function load() {
     setPreview(null);
@@ -24,15 +27,45 @@ export default function ResearchImportsScreen() {
     }
   }
 
+  async function loadFile() {
+    if (importing) return;
+    setImporting(true);
+    setPreview(null);
+    setError('');
+    try {
+      const selection = await File.pickFileAsync({ mimeTypes: '*/*' });
+      if (selection.canceled) return;
+      const file = selection.result;
+      if (!file.name.toLowerCase().endsWith('.json') ||
+          !Number.isSafeInteger(file.size) ||
+          file.size < 1 || file.size > 131072) {
+        throw new Error('INVALID_JSON_FILE');
+      }
+      const content = await file.text();
+      setPreview(parseResearchResultFile(content));
+      setRaw('');
+    } catch {
+      setError('Fichier Scout refusé : format, taille ou preuves invalides.');
+    } finally {
+      setImporting(false);
+    }
+  }
+
   return (
     <View style={styles.card}>
       <Text style={styles.title}>Résultats Scout</Text>
 
       <Text style={styles.note}>
-        Import manuel expérimental. Les données importées
-        ne sont pas authentifiées et ne donnent aucune
-        autorisation commerciale.
+        Import local expérimental (fichier ou texte). Les données
+        importées restent non authentifiées. Aucune action
+        commerciale ni dépense ne sont autorisées.
       </Text>
+
+      <Pressable style={styles.button} onPress={loadFile} disabled={importing}>
+        <Text style={styles.buttonText}>
+          {importing ? 'Lecture du fichier…' : 'Choisir un fichier Scout (.json)'}
+        </Text>
+      </Pressable>
 
       <TextInput
         style={styles.input}
@@ -131,7 +164,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#166534',
     padding: 14,
     borderRadius: 10,
-    alignItems: 'center'
+    alignItems: 'center',
+    marginBottom: 12
   },
   buttonText: {
     color: '#ffffff',
