@@ -9,6 +9,8 @@ import {
   type ImportedPreview
 } from '../domain/mobileResearchImport';
 import { parseResearchResultFile } from '../domain/researchResultFile';
+import ResearchPreviewCards from './ResearchPreviewCards';
+import ScoutSyncSection from './ScoutSyncSection';
 
 export default function ResearchImportsScreen() {
   const [raw, setRaw] = useState('');
@@ -52,6 +54,8 @@ export default function ResearchImportsScreen() {
   }
 
   return (
+    <>
+    <ScoutSyncSection />
     <View style={styles.card}>
       <Text style={styles.title}>Résultats Scout</Text>
 
@@ -86,49 +90,9 @@ export default function ResearchImportsScreen() {
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      {preview && (
-        <>
-          <Text style={styles.note}>
-            Statut importé : {preview.status}
-          </Text>
-
-          {preview.cards.length === 0 && (
-            <Text style={styles.note}>
-              Aucune opportunité à afficher.
-            </Text>
-          )}
-
-          {preview.cards.map((item, index) => (
-            <View key={index} style={styles.result}>
-              <Text style={styles.title}>{item.name}</Text>
-
-              <Text style={styles.note}>
-                Coût : {item.cost_cents === null
-                  ? 'Inconnu'
-                  : (item.cost_cents / 100).toFixed(2) + ' €'}
-              </Text>
-
-              <Text style={styles.note}>
-                Base du coût : {item.cost_basis}
-              </Text>
-
-              <Text style={styles.note}>
-                Source déclarée : {item.source_url}
-              </Text>
-
-              <Text style={styles.note}>
-                Citation : {item.source_quote}
-              </Text>
-
-              <Text style={styles.warning}>
-                Citation concordante dans les données reçues.
-                Source non authentifiée. Aucune dépense autorisée.
-              </Text>
-            </View>
-          ))}
-        </>
-      )}
+      {preview && <ResearchPreviewCards preview={preview} />}
     </View>
+    </>
   );
 }
 
@@ -174,16 +138,5 @@ const styles = StyleSheet.create({
   error: {
     color: '#fca5a5',
     marginTop: 12
-  },
-  result: {
-    borderTopWidth: 1,
-    borderTopColor: '#475569',
-    marginTop: 16,
-    paddingTop: 16
-  },
-  warning: {
-    color: '#fbbf24',
-    marginTop: 10,
-    lineHeight: 20
   }
 });

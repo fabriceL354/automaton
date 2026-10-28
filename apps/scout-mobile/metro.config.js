@@ -17,16 +17,22 @@ config.watchFolders = [
 ];
 
 // Le moteur NodeNext nomme ses imports .js ; Metro lit ici les sources .ts.
-// Limiter cet alias au module partage qui verifie les preuves de recherche.
+// Limiter les alias aux deux imports partages effectivement utilises.
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   const isSharedPreview = context.originModulePath === path.join(
     sharedDirectory,
     'research-mobile-preview.ts'
   );
-  const sourceName = isSharedPreview &&
-    moduleName === './research-evidence-policy.js'
-    ? './research-evidence-policy'
-    : moduleName;
+  const isSharedReception = context.originModulePath === path.join(
+    sharedDirectory,
+    'research-reception.ts'
+  );
+  let sourceName = moduleName;
+  if (isSharedPreview && moduleName === './research-evidence-policy.js') {
+    sourceName = './research-evidence-policy';
+  } else if (isSharedReception && moduleName === './research-mobile-preview.js') {
+    sourceName = './research-mobile-preview';
+  }
 
   return context.resolveRequest(context, sourceName, platform);
 };
