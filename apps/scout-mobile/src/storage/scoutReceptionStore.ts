@@ -7,14 +7,24 @@ export interface ReceptionDatabase {
   getFirstAsync<T>(sql: string): Promise<T | null>;
 }
 
-export interface ResearchReceptionStore {
-  save(raw: string): Promise<ReceivedResearch>;
-  load(): Promise<ReceivedResearch | null>;
+export interface ValidatedReceptionStore<T> {
+  save(raw: string): Promise<T>;
+  load(): Promise<T | null>;
 }
+
+export type ResearchReceptionStore = ValidatedReceptionStore<ReceivedResearch>;
 
 export function createResearchReceptionStore(
   open: () => Promise<ReceptionDatabase>
 ): ResearchReceptionStore {
+  return createValidatedReceptionStore(open, parseScoutReception);
+}
+
+/** Reuse the local singleton storage with a caller-selected strict codec. */
+export function createValidatedReceptionStore<T>(
+  open: () => Promise<ReceptionDatabase>,
+  decode: (raw: string) => T
+): ValidatedReceptionStore<T> {
   let database: Promise<ReceptionDatabase> | null = null;
   function getDatabase() {
     if (!database) {
@@ -36,7 +46,7 @@ export function createResearchReceptionStore(
   return {
     async save(raw) {
       // Validate before opening storage. Atomic singleton replacement, no manual records.
-      const result = parseScoutReception(raw);
+      const result = decode(raw);
       const db = await getDatabase();
       await db.runAsync(
         'INSERT INTO latest_research (id, payload) VALUES (1, ?) ' +
@@ -51,7 +61,7 @@ export function createResearchReceptionStore(
         'SELECT payload FROM latest_research WHERE id = 1'
       );
       // Stored content is untrusted too; never display it without revalidation.
-      return row ? parseScoutReception(row.payload) : null;
+      return row ? decode(row.payload) : null;
     }
   };
 }

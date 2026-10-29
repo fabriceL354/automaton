@@ -17,24 +17,19 @@ config.watchFolders = [
 ];
 
 // Le moteur NodeNext nomme ses imports .js ; Metro lit ici les sources .ts.
-// Limiter les alias aux deux imports partages effectivement utilises.
+// Limiter les alias aux imports partages effectivement utilises.
 config.resolver.resolveRequest = (context, moduleName, platform) => {
-  const isSharedPreview = context.originModulePath === path.join(
-    sharedDirectory,
-    'research-mobile-preview.ts'
+  const aliases = [
+    ['research-mobile-preview.ts', './research-evidence-policy.js', './research-evidence-policy'],
+    ['research-reception.ts', './research-mobile-preview.js', './research-mobile-preview'],
+    ['research-mobile-import.ts', './research-evidence-policy.js', './research-evidence-policy'],
+    ['research-public-sync.ts', './research-mobile-import.js', './research-mobile-import'],
+    ['research-sync-https-preparation.ts', './research-public-sync.js', './research-public-sync']
+  ];
+  const match = aliases.find(([origin, name]) =>
+    context.originModulePath === path.join(sharedDirectory, origin) && moduleName === name
   );
-  const isSharedReception = context.originModulePath === path.join(
-    sharedDirectory,
-    'research-reception.ts'
-  );
-  let sourceName = moduleName;
-  if (isSharedPreview && moduleName === './research-evidence-policy.js') {
-    sourceName = './research-evidence-policy';
-  } else if (isSharedReception && moduleName === './research-mobile-preview.js') {
-    sourceName = './research-mobile-preview';
-  }
-
-  return context.resolveRequest(context, sourceName, platform);
+  return context.resolveRequest(context, match ? match[2] : moduleName, platform);
 };
 
 module.exports = config;
