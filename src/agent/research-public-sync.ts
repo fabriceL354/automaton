@@ -1,4 +1,5 @@
 import { parseMobileResearchImport, type ImportedPreview } from './research-mobile-import.js';
+import { parseResearchBoundaryJson } from './research-data-boundary.js';
 
 export const PUBLIC_SYNC_MAX_BYTES = 12000;
 export type PublicResearchEnvelope = {
@@ -50,7 +51,7 @@ export function displaySourceUrl(raw: unknown): raw is string {
 export function parsePublicResearchEnvelope(raw: string): PublicResearchEnvelope {
   if (typeof raw !== 'string' || !raw.trim() || raw.length > PUBLIC_SYNC_MAX_BYTES ||
       utf8Bytes(raw) > PUBLIC_SYNC_MAX_BYTES) throw new Error('INVALID_PUBLIC_SYNC_SIZE');
-  const data: unknown = JSON.parse(raw);
+  const data = parseResearchBoundaryJson(raw);
   if (!syncRecord(data)) throw new Error('INVALID_PUBLIC_SYNC');
   syncExact(data, ['protocol', 'protocol_version', 'engine_id', 'research_id', 'revision',
     'generated_at', 'classification', 'data_origin', 'authentication', 'execution_authorized', 'preview']);

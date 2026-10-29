@@ -3,6 +3,7 @@ import {
   type ResearchReceptionMessage
 } from '../../../../src/agent/research-reception';
 import { parseMobileResearchImport, type ImportedPreview } from './mobileResearchImport';
+import { parseResearchBoundaryJson } from '../../../../src/agent/research-data-boundary';
 
 export type ReceivedResearch = Omit<ResearchReceptionMessage, 'preview'> & {
   preview: ImportedPreview;
@@ -24,7 +25,7 @@ export function parseScoutReception(raw: string): ReceivedResearch {
       byteLength(raw) > RESEARCH_RECEPTION_MAX_BYTES) {
     throw new Error('INVALID_RECEPTION_SIZE');
   }
-  const data: unknown = JSON.parse(raw);
+  const data = parseResearchBoundaryJson(raw);
   const keys = ['protocol', 'protocol_version', 'research_id', 'generated_at',
     'classification', 'authentication', 'execution_authorized', 'preview'];
   if (!data || typeof data !== 'object' || Array.isArray(data) ||

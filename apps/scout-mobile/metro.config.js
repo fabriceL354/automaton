@@ -21,9 +21,12 @@ config.watchFolders = [
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   const aliases = [
     ['research-mobile-preview.ts', './research-evidence-policy.js', './research-evidence-policy'],
+    ['research-mobile-preview.ts', './research-data-boundary.js', './research-data-boundary'],
     ['research-reception.ts', './research-mobile-preview.js', './research-mobile-preview'],
     ['research-mobile-import.ts', './research-evidence-policy.js', './research-evidence-policy'],
+    ['research-mobile-import.ts', './research-data-boundary.js', './research-data-boundary'],
     ['research-public-sync.ts', './research-mobile-import.js', './research-mobile-import'],
+    ['research-public-sync.ts', './research-data-boundary.js', './research-data-boundary'],
     ['research-sync-https-preparation.ts', './research-public-sync.js', './research-public-sync']
   ];
   const match = aliases.find(([origin, name]) =>

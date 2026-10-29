@@ -1,4 +1,5 @@
 import type { ResearchOutput } from './research-controller.js';
+import { assertResearchProjectionBoundary } from './research-data-boundary.js';
 
 import {
   quoteAppearsInReadPage,
@@ -19,6 +20,7 @@ export type MobileResearchInput = Pick<
 export function toMobileResearchPreview(
   input: MobileResearchInput
 ) {
+  assertResearchProjectionBoundary(input);
   const cards: {
     name: string;
     kind: string;

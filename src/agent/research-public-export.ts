@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { assertResearchProjectionBoundary, parseResearchBoundaryJson } from './research-data-boundary.js';
 import { containsKnownPrivate, type PrivateQueryContext } from './query-guard.js';
 import { toMobileResearchPreview, type MobileResearchInput } from './research-mobile-preview.js';
 import { displaySourceUrl, parsePublicResearchEnvelope, syncExact, syncRecord,
@@ -23,7 +24,8 @@ function project(raw: string, metadata: PublicExportMetadata, context: PrivateQu
   if (typeof raw !== 'string' || !raw.trim() || Buffer.byteLength(raw) > 131072) throw new Error('INVALID_RESEARCH_FILE');
   syncExact(metadata as unknown as Record<string, unknown>,
     ['engine_id', 'research_id', 'revision', 'generated_at', 'data_origin']);
-  const data: unknown = JSON.parse(raw);
+  const data = parseResearchBoundaryJson(raw);
+  assertResearchProjectionBoundary(data);
   if (!syncRecord(data) || data.version !== '11.1' ||
       !['PASS', 'BLOCKED', 'INSUFFICIENT_EVIDENCE'].includes(String(data.status)) ||
       !Array.isArray(data.evidence) || data.evidence.length > 10 ||

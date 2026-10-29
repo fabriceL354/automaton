@@ -1,6 +1,8 @@
 import { parseMobileResearchImport, type ImportedPreview } from './mobileResearchImport';
 import { toMobileResearchPreview } from '../../../../src/agent/research-mobile-preview';
 import type { MobileResearchInput } from '../../../../src/agent/research-mobile-preview';
+import { assertResearchProjectionBoundary, parseResearchBoundaryJson }
+  from '../../../../src/agent/research-data-boundary';
 
 const MAX_FILE_CHARS = 131072;
 const MAX_EVIDENCE = 10;
@@ -32,13 +34,14 @@ export function parseResearchResultFile(raw: string): ImportedPreview {
   if (!raw.trim() || raw.length > MAX_FILE_CHARS) {
     throw new Error('INVALID_FILE_SIZE');
   }
-  const data: unknown = JSON.parse(raw);
+  const data = parseResearchBoundaryJson(raw);
   if (!isRecord(data)) throw new Error('INVALID_FILE');
 
   // Keep compatibility with the existing short, untrusted mobile preview.
   if (Object.hasOwn(data, 'cards')) {
     return parseMobileResearchImport(raw);
   }
+  assertResearchProjectionBoundary(data);
 
   // Accept a genuine *shape* of a Scout read-only research.json output.
   // Shape and quote checks do not authenticate its origin.

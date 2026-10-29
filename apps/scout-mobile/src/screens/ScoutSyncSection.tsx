@@ -53,7 +53,7 @@ export default function ScoutSyncSection() {
       <Text style={s.title}>Synchronisation Scout</Text>
       <Text style={s.warning}>
         Liaison réelle non activée. Fournisseur simulé uniquement.
-        Données fictives et non authentifiées. Aucune connexion réseau.
+        Origine déclarée, non authentifiée. Aucune connexion réseau.
       </Text>
       <Pressable style={s.button} disabled={busy} onPress={() => { void receiveDemo(); }}>
         <Text style={s.buttonText}>
@@ -67,7 +67,7 @@ export default function ScoutSyncSection() {
           <Text style={s.note}>
             {result.protocol_version === 1 ? 'Démonstration V1 conservée.' :
               `Version 2 · révision ${result.revision} · ${result.data_origin === 'FICTIONAL_TEST'
-                ? 'Données fictives' : 'Données déclarées, non authentifiées'}`}
+                ? 'Données fictives déclarées' : 'Recherche publique déclarée, non vérifiée ; aucun modèle réel attesté'}`}
           </Text>
           <Text style={s.note}>Recherche : {result.research_id}</Text>
           <Text style={s.note}>Horodatage déclaré : {result.generated_at}</Text>

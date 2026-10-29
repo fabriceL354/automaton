@@ -4,36 +4,25 @@ import {
   Pressable, StyleSheet, Text, TextInput, View
 } from 'react-native';
 
-import {
-  parseMobileResearchImport,
-  type ImportedPreview
-} from '../domain/mobileResearchImport';
-import { parseResearchResultFile } from '../domain/researchResultFile';
+import { reviewResearchImport, IMPORT_REFUSED, type ResearchImportReview } from '../domain/researchImportReview';
+import { LEGACY_RESEARCH_TRUST_WARNING } from '../../../../src/agent/research-data-boundary';
 import ResearchPreviewCards from './ResearchPreviewCards';
 import ScoutSyncSection from './ScoutSyncSection';
 
 export default function ResearchImportsScreen() {
   const [raw, setRaw] = useState('');
-  const [preview, setPreview] = useState<ImportedPreview | null>(null);
-  const [error, setError] = useState('');
+  const [review, setReview] = useState<ResearchImportReview>({ preview: null, error: '' });
   const [importing, setImporting] = useState(false);
 
   function load() {
-    setPreview(null);
-    setError('');
-
-    try {
-      setPreview(parseMobileResearchImport(raw));
-    } catch {
-      setError('Résultat invalide ou non conforme au contrat Scout.');
-    }
+    if (importing) return;
+    setReview(previous => reviewResearchImport(previous.preview, raw, 'PREVIEW'));
   }
 
   async function loadFile() {
     if (importing) return;
     setImporting(true);
-    setPreview(null);
-    setError('');
+    setReview(previous => ({ ...previous, error: '' }));
     try {
       const selection = await File.pickFileAsync({ mimeTypes: '*/*' });
       if (selection.canceled) return;
@@ -44,10 +33,9 @@ export default function ResearchImportsScreen() {
         throw new Error('INVALID_JSON_FILE');
       }
       const content = await file.text();
-      setPreview(parseResearchResultFile(content));
-      setRaw('');
+      setReview(previous => reviewResearchImport(previous.preview, content, 'RESEARCH_FILE'));
     } catch {
-      setError('Fichier Scout refusé : format, taille ou preuves invalides.');
+      setReview(previous => ({ ...previous, error: IMPORT_REFUSED }));
     } finally {
       setImporting(false);
     }
@@ -64,6 +52,7 @@ export default function ResearchImportsScreen() {
         importées restent non authentifiées. Aucune action
         commerciale ni dépense ne sont autorisées.
       </Text>
+      <Text style={styles.note}>{LEGACY_RESEARCH_TRUST_WARNING}</Text>
 
       <Pressable style={styles.button} onPress={loadFile} disabled={importing}>
         <Text style={styles.buttonText}>
@@ -84,13 +73,13 @@ export default function ResearchImportsScreen() {
         maxLength={12000}
       />
 
-      <Pressable style={styles.button} onPress={load}>
+      <Pressable style={styles.button} onPress={load} disabled={importing}>
         <Text style={styles.buttonText}>Examiner le résultat</Text>
       </Pressable>
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {review.error ? <Text style={styles.error}>{review.error}</Text> : null}
 
-      {preview && <ResearchPreviewCards preview={preview} />}
+      {review.preview && <ResearchPreviewCards preview={review.preview} />}
     </View>
     </>
   );

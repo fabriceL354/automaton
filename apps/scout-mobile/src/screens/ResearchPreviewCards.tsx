@@ -1,11 +1,13 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { ImportedPreview } from '../domain/mobileResearchImport';
+import { RESEARCH_ECONOMIC_WARNING } from '../../../../src/agent/research-data-boundary';
 
 export default function ResearchPreviewCards({ preview }: { preview: ImportedPreview }) {
   return (
     <>
       <Text style={s.note}>Statut du résultat : {preview.status}</Text>
+      <Text style={s.warning}>{RESEARCH_ECONOMIC_WARNING}</Text>
       {preview.cards.length === 0 && (
         <Text style={s.note}>Aucune opportunité à afficher.</Text>
       )}

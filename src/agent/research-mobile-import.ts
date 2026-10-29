@@ -1,6 +1,7 @@
 import {
   quotedCostMatches
 } from './research-evidence-policy.js';
+import { parseResearchBoundaryJson } from './research-data-boundary.js';
 
 export type ImportedCard = {
   name: string;
@@ -42,7 +43,7 @@ export function parseMobileResearchImport(
     throw new Error('INVALID_IMPORT_SIZE');
   }
 
-  const data: unknown = JSON.parse(raw);
+  const data = parseResearchBoundaryJson(raw);
 
   if (!record(data) || !exactKeys(data, ['status', 'cards'])) {
     throw new Error('INVALID_IMPORT');
