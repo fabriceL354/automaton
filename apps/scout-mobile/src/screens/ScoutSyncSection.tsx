@@ -1,13 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import type { ReceivedResearch } from '../domain/scoutReception';
-import { receiveScoutResearch } from '../domain/receiveScoutResearch';
+import { createScoutSyncSession, type SavedScoutResearch } from '../domain/scoutSyncSession';
 import { scoutReceptionStore } from '../storage/scoutReception';
-import { demoResearchTransport } from '../transport/scoutReceptionTransport';
+import { createScoutDemoV2Transport, DEMO_ENGINE_ID } from '../transport/scoutDemoV2Transport';
 import ResearchPreviewCards from './ResearchPreviewCards';
 
+const syncSession = createScoutSyncSession(scoutReceptionStore,
+  { engineId: DEMO_ENGINE_ID, nowMs: Date.now },
+  createScoutDemoV2Transport(scoutReceptionStore));
+
 export default function ScoutSyncSection() {
-  const [result, setResult] = useState<ReceivedResearch | null>(null);
+  const [result, setResult] = useState<SavedScoutResearch | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
   const active = useRef(false);
@@ -15,7 +18,7 @@ export default function ScoutSyncSection() {
 
   useEffect(() => {
     active.current = true;
-    scoutReceptionStore.load()
+    syncSession.load()
       .then(saved => { if (active.current) setResult(saved); })
       .catch(() => {
         if (active.current) setError('Résultat local indisponible ou non conforme.');
@@ -33,7 +36,7 @@ export default function ScoutSyncSection() {
     setBusy(true);
     setError('');
     try {
-      const received = await receiveScoutResearch(demoResearchTransport, scoutReceptionStore);
+      const received = await syncSession.receive();
       if (active.current) setResult(received);
     } catch {
       if (active.current) setError(
@@ -54,15 +57,20 @@ export default function ScoutSyncSection() {
       </Text>
       <Pressable style={s.button} disabled={busy} onPress={() => { void receiveDemo(); }}>
         <Text style={s.buttonText}>
-          {busy ? 'Lecture locale…' : 'Recevoir un résultat de démonstration'}
+          {busy ? 'Lecture locale…' : 'Recevoir une démonstration V2'}
         </Text>
       </Pressable>
       {error ? <Text style={s.error}>{error}</Text> : null}
       {result ? (
         <>
-          <Text style={s.note}>Dernier résultat fictif conservé sur ce téléphone, consultable hors connexion.</Text>
+          <Text style={s.note}>Dernier résultat conservé sur ce téléphone, consultable hors connexion.</Text>
+          <Text style={s.note}>
+            {result.protocol_version === 1 ? 'Démonstration V1 conservée.' :
+              `Version 2 · révision ${result.revision} · ${result.data_origin === 'FICTIONAL_TEST'
+                ? 'Données fictives' : 'Données déclarées, non authentifiées'}`}
+          </Text>
           <Text style={s.note}>Recherche : {result.research_id}</Text>
-          <Text style={s.note}>Horodatage fictif : {result.generated_at}</Text>
+          <Text style={s.note}>Horodatage déclaré : {result.generated_at}</Text>
           <ResearchPreviewCards preview={result.preview} />
         </>
       ) : <Text style={s.note}>Aucun résultat de démonstration conservé.</Text>}
