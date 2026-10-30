@@ -1,3 +1,4 @@
+import { createFictionalReadOnlyResponder } from '../agent/research-readonly-lab.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -178,4 +179,84 @@ describe('Scout sync: simulated engine → release → read-only reception → a
     await store.save(released({ ...syncFixtureMetadata(), engine_id: 'engine-other' }));
     await expect(receiver.load()).rejects.toThrow('WRONG_STORED_ENGINE');
   });
+});
+
+
+// SCOUT_READONLY_LAB_TESTS
+it('lab: accepts an authorized fictional GET', () => {
+  const respond = createFictionalReadOnlyResponder(
+    released(), 'test-token-scout'
+  );
+
+  const reply = respond({
+    method: 'GET',
+    path: '/v2/research-result',
+    authorization: 'Bearer test-token-scout'
+  });
+
+  expect(reply.status).toBe(200);
+  expect(reply.headers['cache-control']).toBe('no-store');
+  expect(reply.headers['content-type']).toBe('application/json');
+
+  const data = JSON.parse(reply.body);
+
+  expect(data.data_origin).toBe('FICTIONAL_TEST');
+  expect(data.execution_authorized).toBe(false);
+  expect(data.preview.cards[0].cost_cents).toBe(850);
+  expect(reply.body).not.toContain('test-token-scout');
+});
+
+it('lab: refuses an invalid token', () => {
+  const respond = createFictionalReadOnlyResponder(
+    released(), 'test-token-scout'
+  );
+
+  const reply = respond({
+    method: 'GET',
+    path: '/v2/research-result',
+    authorization: 'Bearer test-token-invalid'
+  });
+
+  expect(reply.status).toBe(401);
+  expect(reply.body).toBe('');
+});
+
+it('lab: refuses writes and unknown paths', () => {
+  const respond = createFictionalReadOnlyResponder(
+    released(), 'test-token-scout'
+  );
+
+  const request = {
+    path: '/v2/research-result',
+    authorization: 'Bearer test-token-scout'
+  };
+
+  expect(respond({ ...request, method: 'POST' }).status).toBe(405);
+  expect(respond({ ...request, method: 'DELETE' }).status).toBe(405);
+
+  expect(respond({
+    ...request,
+    method: 'GET',
+    path: '/private'
+  }).status).toBe(404);
+});
+
+it('lab: refuses non-fictional results', () => {
+  const data = JSON.parse(released());
+  data.data_origin = 'PUBLIC_RESEARCH';
+
+  expect(() => createFictionalReadOnlyResponder(
+    JSON.stringify(data),
+    'test-token-scout'
+  )).toThrow();
+});
+
+it('lab: refuses execution authorization', () => {
+  const data = JSON.parse(released());
+  data.execution_authorized = true;
+
+  expect(() => createFictionalReadOnlyResponder(
+    JSON.stringify(data),
+    'test-token-scout'
+  )).toThrow();
 });
