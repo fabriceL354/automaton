@@ -8,6 +8,7 @@ import { reviewResearchImport, IMPORT_REFUSED, type ResearchImportReview } from 
 import { LEGACY_RESEARCH_TRUST_WARNING } from '../../../../src/agent/research-data-boundary';
 import ResearchPreviewCards from './ResearchPreviewCards';
 import ScoutSyncSection from './ScoutSyncSection';
+import { isAcceptableScoutJsonFile } from '../domain/scoutJsonFileSelection';
 
 export default function ResearchImportsScreen() {
   const [raw, setRaw] = useState('');
@@ -27,9 +28,7 @@ export default function ResearchImportsScreen() {
       const selection = await File.pickFileAsync({ mimeTypes: '*/*' });
       if (selection.canceled) return;
       const file = selection.result;
-      if (!file.name.toLowerCase().endsWith('.json') ||
-          !Number.isSafeInteger(file.size) ||
-          file.size < 1 || file.size > 131072) {
+      if (!isAcceptableScoutJsonFile(file)) {
         throw new Error('INVALID_JSON_FILE');
       }
       const content = await file.text();
