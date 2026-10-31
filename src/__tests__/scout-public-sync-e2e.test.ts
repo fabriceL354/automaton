@@ -899,3 +899,161 @@ it('registered handler lab: missing or corrupted registry refuses access', async
     fs.rmSync(folder, { recursive: true, force: true });
   }
 });
+
+
+
+// SCOUT_REGISTERED_SERVER_REAL_TLS_TEST
+it('registered server lab: real TLS and persistent revocation', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const child = await import('node:child_process');
+  const https = await import('node:https');
+
+  const { startRegisteredLoopbackReadonlyHttpsLab } =
+    await import('../agent/research-readonly-registered-server-lab.js');
+
+  const folder = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'scout-registered-tls-')
+  );
+
+  const key = path.join(folder, 'key.pem');
+  const cert = path.join(folder, 'cert.pem');
+  const registryFile = path.join(folder, 'device.json');
+
+  let server: {
+    host: string;
+    port: number;
+    close: () => Promise<void>;
+  } | undefined;
+
+  try {
+    child.execFileSync('openssl', [
+      'req', '-x509',
+      '-newkey', 'rsa:2048',
+      '-sha256', '-nodes',
+      '-keyout', key,
+      '-out', cert,
+      '-days', '1',
+      '-subj', '/CN=127.0.0.1',
+      '-addext', 'subjectAltName=IP:127.0.0.1'
+    ], {
+      stdio: 'ignore',
+      timeout: 15000
+    });
+
+    const token = generateLabDeviceToken();
+    const hash = hashLabDeviceToken(token);
+    const registry = createLabDeviceRegistry(registryFile);
+
+    registry.enroll(hash);
+
+    const certificate = fs.readFileSync(cert);
+
+    const options = {
+      enabled: true,
+      payload: released(),
+      registryFile,
+      tls: {
+        key: fs.readFileSync(key),
+        cert: certificate
+      }
+    };
+
+    server = await startRegisteredLoopbackReadonlyHttpsLab(options);
+
+    expect(server.host).toBe('127.0.0.1');
+
+    const port = server.port;
+
+    function get(authorization: string) {
+      return new Promise<{
+        status: number;
+        body: string;
+        authorized: boolean;
+        protocol: string | null;
+      }>((resolve, reject) => {
+
+        const req = https.request({
+          hostname: '127.0.0.1',
+          port,
+          path: '/v2/research-result',
+          method: 'GET',
+          ca: certificate,
+          rejectUnauthorized: true,
+          minVersion: 'TLSv1.3',
+          maxVersion: 'TLSv1.3',
+          agent: false,
+          headers: { authorization }
+        }, res => {
+          const socket =
+            res.socket as import('node:tls').TLSSocket;
+
+          const authorized = socket.authorized;
+          const protocol = socket.getProtocol();
+
+          let body = '';
+          res.setEncoding('utf8');
+
+          res.on('data', chunk => {
+            body += chunk;
+          });
+
+          res.on('end', () => resolve({
+            status: res.statusCode ?? 0,
+            body,
+            authorized,
+            protocol
+          }));
+        });
+
+        req.on('error', reject);
+        req.setTimeout(3000, () => {
+          req.destroy(new Error('HTTPS_TEST_TIMEOUT'));
+        });
+        req.end();
+      });
+    }
+
+    const valid = await get(`Bearer ${token}`);
+
+    expect(valid.status).toBe(200);
+    expect(valid.authorized).toBe(true);
+    expect(valid.protocol).toBe('TLSv1.3');
+
+    const data = JSON.parse(valid.body);
+
+    expect(data.data_origin).toBe('FICTIONAL_TEST');
+    expect(data.execution_authorized).toBe(false);
+    expect(data.preview.cards[0].cost_cents).toBe(850);
+    expect(valid.body).not.toContain(token);
+
+    const wrong = await get(
+      `Bearer ${generateLabDeviceToken()}`
+    );
+
+    expect(wrong.status).toBe(401);
+
+    registry.revoke();
+
+    const revoked = await get(`Bearer ${token}`);
+
+    expect(revoked.status).toBe(401);
+    expect(revoked.body).toBe('');
+
+    await server.close();
+    server = undefined;
+
+    await expect(
+      startRegisteredLoopbackReadonlyHttpsLab(options)
+    ).rejects.toThrow('LAB_DEVICE_REVOKED');
+
+  } finally {
+    if (server) await server.close();
+
+    fs.rmSync(folder, {
+      recursive: true,
+      force: true
+    });
+  }
+});
