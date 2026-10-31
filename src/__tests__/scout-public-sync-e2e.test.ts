@@ -1,3 +1,12 @@
+
+import {
+  createLabDeviceRegistry
+} from '../agent/research-device-registry-lab.js';
+
+import {
+  createRegisteredReadOnlyHttpsLabHandler
+} from '../agent/research-readonly-registered-handler-lab.js';
+
 import { createReadOnlyHttpsLabHandler } from '../agent/research-readonly-https-handler-lab.js';
 
 import {
@@ -757,5 +766,136 @@ it('loopback lab: real TLS 1.3 and device revocation', async () => {
     } finally {
       fs.rmSync(folder, { recursive: true, force: true });
     }
+  }
+});
+
+
+// SCOUT_REGISTERED_HANDLER_LAB_TESTS
+
+it('registered handler lab: authorized device receives data', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+
+  const folder = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'scout-registered-lab-')
+  );
+
+  try {
+    const file = path.join(folder, 'device.json');
+    const token = generateLabDeviceToken();
+    const hash = hashLabDeviceToken(token);
+
+    createLabDeviceRegistry(file).enroll(hash);
+
+    const handler = createRegisteredReadOnlyHttpsLabHandler(
+      released(),
+      file
+    );
+
+    const reply = invokeHttpsLab(handler, {
+      authorization: `Bearer ${token}`
+    });
+
+    expect(reply.status).toBe(200);
+
+    const data = JSON.parse(reply.body);
+
+    expect(data.data_origin).toBe('FICTIONAL_TEST');
+    expect(data.execution_authorized).toBe(false);
+    expect(data.preview.cards[0].cost_cents).toBe(850);
+
+    expect(invokeHttpsLab(handler, {
+      authorization: `Bearer ${generateLabDeviceToken()}`
+    }).status).toBe(401);
+
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+it('registered handler lab: revocation persists after recreation', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+
+  const folder = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'scout-revocation-lab-')
+  );
+
+  try {
+    const file = path.join(folder, 'device.json');
+    const token = generateLabDeviceToken();
+    const hash = hashLabDeviceToken(token);
+    const registry = createLabDeviceRegistry(file);
+
+    registry.enroll(hash);
+
+    let handler = createRegisteredReadOnlyHttpsLabHandler(
+      released(),
+      file
+    );
+
+    const request = {
+      authorization: `Bearer ${token}`
+    };
+
+    expect(invokeHttpsLab(handler, request).status).toBe(200);
+
+    registry.revoke();
+
+    expect(invokeHttpsLab(handler, request).status).toBe(401);
+
+    handler = createRegisteredReadOnlyHttpsLabHandler(
+      released(),
+      file
+    );
+
+    expect(invokeHttpsLab(handler, request).status).toBe(401);
+
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+it('registered handler lab: missing or corrupted registry refuses access', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+
+  const folder = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'scout-corrupt-lab-')
+  );
+
+  try {
+    const file = path.join(folder, 'device.json');
+    const token = generateLabDeviceToken();
+    const hash = hashLabDeviceToken(token);
+
+    expect(() => createRegisteredReadOnlyHttpsLabHandler(
+      released(),
+      file
+    )).toThrow();
+
+    createLabDeviceRegistry(file).enroll(hash);
+
+    const handler = createRegisteredReadOnlyHttpsLabHandler(
+      released(),
+      file
+    );
+
+    fs.writeFileSync(file, '{INVALID JSON');
+
+    expect(invokeHttpsLab(handler, {
+      authorization: `Bearer ${token}`
+    }).status).toBe(401);
+
+    expect(() => createRegisteredReadOnlyHttpsLabHandler(
+      released(),
+      file
+    )).toThrow();
+
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
   }
 });
