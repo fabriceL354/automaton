@@ -1,3 +1,4 @@
+import { createReadOnlyHttpsLabHandler } from '../agent/research-readonly-https-handler-lab.js';
 
 import {
   generateLabDeviceToken,
@@ -432,4 +433,186 @@ it('session lab: non-fictional or executable data refused', () => {
     hashLabDeviceToken(token),
     () => false
   )).toThrow();
+});
+
+
+// SCOUT_HTTPS_HANDLER_LAB_TESTS
+
+function invokeHttpsLab(
+  handler: ReturnType<typeof createReadOnlyHttpsLabHandler>,
+  options: {
+    encrypted?: boolean;
+    protocol?: string;
+    method?: string;
+    path?: string;
+    authorization?: string;
+  } = {}
+) {
+  let status = -1;
+  let headers: Record<string, string> = {};
+  let body = '';
+  let finished = false;
+
+  const req = {
+    method: options.method ?? 'GET',
+    url: options.path ?? '/v2/research-result',
+    headers: {
+      authorization: options.authorization
+    },
+    socket: {
+      encrypted: options.encrypted ?? true,
+      getProtocol: () => options.protocol ?? 'TLSv1.3'
+    }
+  } as unknown as Parameters<typeof handler>[0];
+
+  const res = {
+    writeHead(
+      code: number,
+      values: Record<string, string>
+    ) {
+      status = code;
+      headers = values;
+      return this;
+    },
+    end(value = '') {
+      body = value;
+      finished = true;
+      return this;
+    }
+  } as unknown as Parameters<typeof handler>[1];
+
+  handler(req, res);
+
+  expect(finished).toBe(true);
+
+  return { status, headers, body };
+}
+
+function makeHttpsLab(revoked: () => boolean = () => false) {
+  const token = generateLabDeviceToken();
+
+  const handler = createReadOnlyHttpsLabHandler(
+    released(),
+    hashLabDeviceToken(token),
+    revoked
+  );
+
+  return { token, handler };
+}
+
+it('https lab: authorized TLS 1.3 GET succeeds', () => {
+  const { token, handler } = makeHttpsLab();
+
+  const reply = invokeHttpsLab(handler, {
+    authorization: `Bearer ${token}`
+  });
+
+  expect(reply.status).toBe(200);
+  expect(reply.headers['cache-control']).toBe('no-store');
+  expect(reply.headers['x-content-type-options']).toBe('nosniff');
+
+  const data = JSON.parse(reply.body);
+
+  expect(data.data_origin).toBe('FICTIONAL_TEST');
+  expect(data.execution_authorized).toBe(false);
+  expect(data.preview.cards[0].cost_cents).toBe(850);
+  expect(reply.body).not.toContain(token);
+});
+
+it('https lab: rejects unencrypted connections', () => {
+  const { token, handler } = makeHttpsLab();
+
+  const reply = invokeHttpsLab(handler, {
+    encrypted: false,
+    authorization: `Bearer ${token}`
+  });
+
+  expect(reply.status).toBe(403);
+  expect(reply.body).toBe('');
+});
+
+it('https lab: rejects TLS 1.2', () => {
+  const { token, handler } = makeHttpsLab();
+
+  const reply = invokeHttpsLab(handler, {
+    protocol: 'TLSv1.2',
+    authorization: `Bearer ${token}`
+  });
+
+  expect(reply.status).toBe(403);
+});
+
+it('https lab: rejects missing credentials', () => {
+  const { handler } = makeHttpsLab();
+
+  const reply = invokeHttpsLab(handler);
+
+  expect(reply.status).toBe(401);
+  expect(reply.body).toBe('');
+});
+
+it('https lab: rejects invalid credentials', () => {
+  const { handler } = makeHttpsLab();
+
+  const reply = invokeHttpsLab(handler, {
+    authorization: `Bearer ${generateLabDeviceToken()}`
+  });
+
+  expect(reply.status).toBe(401);
+});
+
+it('https lab: revocation blocks access', () => {
+  let revoked = false;
+  const { token, handler } = makeHttpsLab(() => revoked);
+
+  const options = {
+    authorization: `Bearer ${token}`
+  };
+
+  expect(invokeHttpsLab(handler, options).status).toBe(200);
+
+  revoked = true;
+
+  const reply = invokeHttpsLab(handler, options);
+
+  expect(reply.status).toBe(401);
+  expect(reply.body).toBe('');
+});
+
+it('https lab: revocation check failure denies access', () => {
+  const { token, handler } = makeHttpsLab(() => {
+    throw new Error('REVOCATION_UNAVAILABLE');
+  });
+
+  const reply = invokeHttpsLab(handler, {
+    authorization: `Bearer ${token}`
+  });
+
+  expect(reply.status).toBe(401);
+});
+
+it('https lab: refuses commercial write methods', () => {
+  const { token, handler } = makeHttpsLab();
+
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    const reply = invokeHttpsLab(handler, {
+      method,
+      authorization: `Bearer ${token}`
+    });
+
+    expect(reply.status).toBe(405);
+    expect(reply.body).toBe('');
+  }
+});
+
+it('https lab: refuses unknown routes', () => {
+  const { token, handler } = makeHttpsLab();
+
+  const reply = invokeHttpsLab(handler, {
+    path: '/private',
+    authorization: `Bearer ${token}`
+  });
+
+  expect(reply.status).toBe(404);
+  expect(reply.body).toBe('');
 });
