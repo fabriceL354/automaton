@@ -1,3 +1,13 @@
+
+import {
+  generateLabDeviceToken,
+  hashLabDeviceToken
+} from '../agent/research-readonly-auth-lab.js';
+
+import {
+  createAuthenticatedFictionalLabResponder
+} from '../agent/research-readonly-session-lab.js';
+
 import { createFictionalReadOnlyResponder } from '../agent/research-readonly-lab.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -258,5 +268,168 @@ it('lab: refuses execution authorization', () => {
   expect(() => createFictionalReadOnlyResponder(
     JSON.stringify(data),
     'test-token-scout'
+  )).toThrow();
+});
+
+
+// SCOUT_AUTH_READONLY_LAB_TESTS
+
+it('session lab: authenticated device receives fictional result', () => {
+  const token = generateLabDeviceToken();
+
+  const respond = createAuthenticatedFictionalLabResponder(
+    released(),
+    hashLabDeviceToken(token),
+    () => false
+  );
+
+  const reply = respond({
+    method: 'GET',
+    path: '/v2/research-result',
+    authorization: `Bearer ${token}`
+  });
+
+  expect(reply.status).toBe(200);
+  expect(reply.headers['cache-control']).toBe('no-store');
+
+  const data = JSON.parse(reply.body);
+
+  expect(data.data_origin).toBe('FICTIONAL_TEST');
+  expect(data.execution_authorized).toBe(false);
+  expect(data.preview.cards[0].cost_cents).toBe(850);
+  expect(reply.body).not.toContain(token);
+});
+
+it('session lab: missing or wrong credentials are refused', () => {
+  const token = generateLabDeviceToken();
+
+  const respond = createAuthenticatedFictionalLabResponder(
+    released(),
+    hashLabDeviceToken(token),
+    () => false
+  );
+
+  const request = {
+    method: 'GET',
+    path: '/v2/research-result'
+  };
+
+  expect(respond(request).status).toBe(401);
+
+  const wrong = respond({
+    ...request,
+    authorization: `Bearer ${generateLabDeviceToken()}`
+  });
+
+  expect(wrong.status).toBe(401);
+  expect(wrong.body).toBe('');
+});
+
+it('session lab: revocation immediately blocks access', () => {
+  const token = generateLabDeviceToken();
+  let revoked = false;
+
+  const respond = createAuthenticatedFictionalLabResponder(
+    released(),
+    hashLabDeviceToken(token),
+    () => revoked
+  );
+
+  const request = {
+    method: 'GET',
+    path: '/v2/research-result',
+    authorization: `Bearer ${token}`
+  };
+
+  expect(respond(request).status).toBe(200);
+
+  revoked = true;
+
+  const refused = respond(request);
+
+  expect(refused.status).toBe(401);
+  expect(refused.body).toBe('');
+});
+
+it('session lab: revocation errors deny access', () => {
+  const token = generateLabDeviceToken();
+
+  const respond = createAuthenticatedFictionalLabResponder(
+    released(),
+    hashLabDeviceToken(token),
+    () => {
+      throw new Error('REVOCATION_CHECK_FAILED');
+    }
+  );
+
+  const reply = respond({
+    method: 'GET',
+    path: '/v2/research-result',
+    authorization: `Bearer ${token}`
+  });
+
+  expect(reply.status).toBe(401);
+  expect(reply.body).toBe('');
+});
+
+it('session lab: commercial write methods are refused', () => {
+  const token = generateLabDeviceToken();
+
+  const respond = createAuthenticatedFictionalLabResponder(
+    released(),
+    hashLabDeviceToken(token),
+    () => false
+  );
+
+  const request = {
+    path: '/v2/research-result',
+    authorization: `Bearer ${token}`
+  };
+
+  expect(respond({ ...request, method: 'POST' }).status).toBe(405);
+  expect(respond({ ...request, method: 'DELETE' }).status).toBe(405);
+  expect(respond({ ...request, method: 'PATCH' }).status).toBe(405);
+});
+
+it('session lab: unknown routes are refused', () => {
+  const token = generateLabDeviceToken();
+
+  const respond = createAuthenticatedFictionalLabResponder(
+    released(),
+    hashLabDeviceToken(token),
+    () => false
+  );
+
+  expect(respond({
+    method: 'GET',
+    path: '/private',
+    authorization: `Bearer ${token}`
+  }).status).toBe(404);
+});
+
+it('session lab: non-fictional or executable data refused', () => {
+  const token = generateLabDeviceToken();
+  const original = JSON.parse(released());
+
+  const publicData = {
+    ...original,
+    data_origin: 'PUBLIC_RESEARCH'
+  };
+
+  expect(() => createAuthenticatedFictionalLabResponder(
+    JSON.stringify(publicData),
+    hashLabDeviceToken(token),
+    () => false
+  )).toThrow();
+
+  const executable = {
+    ...original,
+    execution_authorized: true
+  };
+
+  expect(() => createAuthenticatedFictionalLabResponder(
+    JSON.stringify(executable),
+    hashLabDeviceToken(token),
+    () => false
   )).toThrow();
 });
