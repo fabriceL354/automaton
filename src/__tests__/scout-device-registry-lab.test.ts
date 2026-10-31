@@ -199,3 +199,40 @@ describe('Scout device registry persistence lab', () => {
   });
 
 });
+
+
+
+// SCOUT_DURABLE_REVOCATION_TEST
+it('revocation leaves no temporary files', async () => {
+  const { readdirSync } = await import('node:fs');
+
+  const folder = mkdtempSync(
+    join(tmpdir(), 'scout-durable-revocation-')
+  );
+
+  chmodSync(folder, 0o700);
+
+  try {
+    const file = join(folder, 'device.json');
+    const hash = hashLabDeviceToken(
+      generateLabDeviceToken()
+    );
+
+    const registry = createLabDeviceRegistry(file);
+
+    registry.enroll(hash);
+    registry.revoke();
+
+    expect(readdirSync(folder)).toEqual(['device.json']);
+
+    const reopened = createLabDeviceRegistry(file);
+
+    expect(reopened.isRevoked(hash)).toBe(true);
+
+  } finally {
+    rmSync(folder, {
+      recursive: true,
+      force: true
+    });
+  }
+});

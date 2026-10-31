@@ -6,7 +6,9 @@ import {
   lstatSync,
   readFileSync,
   writeFileSync,
-  renameSync
+  renameSync,
+  fsyncSync,
+  unlinkSync
 } from 'node:fs';
 
 import {
@@ -151,19 +153,54 @@ export function createLabDeviceRegistry(file: string) {
       const temp =
         file + '.tmp-' + randomBytes(12).toString('hex');
 
-      writeFileSync(
-        temp,
-        JSON.stringify({
+      let fd: number | undefined;
+
+      try {
+        fd = openSync(
+          temp,
+          constants.O_WRONLY |
+          constants.O_CREAT |
+          constants.O_EXCL |
+          constants.O_NOFOLLOW,
+          0o600
+        );
+
+        writeFileSync(fd, JSON.stringify({
           ...record,
           revoked: true
-        }),
-        {
-          flag: 'wx',
-          mode: 0o600
-        }
-      );
+        }));
 
-      renameSync(temp, file);
+        fsyncSync(fd);
+        closeSync(fd);
+        fd = undefined;
+
+        renameSync(temp, file);
+
+        const dirFd = openSync(
+          dirname(file),
+          constants.O_RDONLY |
+          constants.O_DIRECTORY |
+          constants.O_NOFOLLOW
+        );
+
+        try {
+          fsyncSync(dirFd);
+        } finally {
+          closeSync(dirFd);
+        }
+
+      } finally {
+        if (fd !== undefined) closeSync(fd);
+
+        try {
+          unlinkSync(temp);
+        } catch (error) {
+          if (
+            (error as NodeJS.ErrnoException).code !==
+            'ENOENT'
+          ) throw error;
+        }
+      }
     }
   };
 }
