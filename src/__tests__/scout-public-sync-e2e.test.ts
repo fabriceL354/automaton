@@ -616,3 +616,146 @@ it('https lab: refuses unknown routes', () => {
   expect(reply.status).toBe(404);
   expect(reply.body).toBe('');
 });
+
+
+
+// SCOUT_REAL_TLS_LOOPBACK_TEST
+it('loopback lab: real TLS 1.3 and device revocation', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const child = await import('node:child_process');
+  const https = await import('node:https');
+
+  const { startLoopbackReadonlyHttpsLab } =
+    await import('../agent/research-readonly-https-server-lab.js');
+
+  const folder = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'scout-tls-lab-')
+  );
+
+  const key = path.join(folder, 'key.pem');
+  const cert = path.join(folder, 'cert.pem');
+
+  let server: Awaited<
+    ReturnType<typeof startLoopbackReadonlyHttpsLab>
+  > | undefined;
+
+  try {
+    child.execFileSync('openssl', [
+      'req', '-x509',
+      '-newkey', 'rsa:2048',
+      '-sha256', '-nodes',
+      '-keyout', key,
+      '-out', cert,
+      '-days', '1',
+      '-subj', '/CN=127.0.0.1',
+      '-addext', 'subjectAltName=IP:127.0.0.1'
+    ], {
+      stdio: 'ignore',
+      timeout: 15000
+    });
+
+    const certificate = fs.readFileSync(cert);
+    const token = generateLabDeviceToken();
+    let revoked = false;
+
+    server = await startLoopbackReadonlyHttpsLab({
+      enabled: true,
+      payload: released(),
+      expectedDeviceTokenHash: hashLabDeviceToken(token),
+      isRevoked: () => revoked,
+      tls: {
+        key: fs.readFileSync(key),
+        cert: certificate
+      }
+    });
+
+    expect(server.host).toBe('127.0.0.1');
+
+    const request = (
+      authorization: string,
+      method = 'GET'
+    ) => new Promise<{
+      status: number;
+      body: string;
+      protocol: string | null;
+      authorized: boolean;
+    }>((resolve, reject) => {
+
+      const req = https.request({
+        hostname: '127.0.0.1',
+        port: server!.port,
+        path: '/v2/research-result',
+        method,
+        ca: certificate,
+        rejectUnauthorized: true,
+        minVersion: 'TLSv1.3',
+        maxVersion: 'TLSv1.3',
+        agent: false,
+        headers: { authorization }
+      }, res => {
+        const socket =
+          res.socket as import('node:tls').TLSSocket;
+
+        const protocol = socket.getProtocol();
+        const authorized = socket.authorized;
+        let body = '';
+
+        res.setEncoding('utf8');
+        res.on('data', chunk => { body += chunk; });
+
+        res.on('end', () => resolve({
+          status: res.statusCode ?? 0,
+          body,
+          protocol,
+          authorized
+        }));
+      });
+
+      req.on('error', reject);
+      req.setTimeout(3000, () => {
+        req.destroy(new Error('HTTPS_TEST_TIMEOUT'));
+      });
+
+      req.end();
+    });
+
+    const valid = await request(`Bearer ${token}`);
+
+    expect(valid.status).toBe(200);
+    expect(valid.protocol).toBe('TLSv1.3');
+    expect(valid.authorized).toBe(true);
+
+    const data = JSON.parse(valid.body);
+
+    expect(data.data_origin).toBe('FICTIONAL_TEST');
+    expect(data.execution_authorized).toBe(false);
+    expect(data.preview.cards[0].cost_cents).toBe(850);
+
+    const invalid = await request(
+      `Bearer ${generateLabDeviceToken()}`
+    );
+
+    expect(invalid.status).toBe(401);
+    expect(invalid.body).toBe('');
+
+    const write = await request(`Bearer ${token}`, 'POST');
+
+    expect(write.status).toBe(405);
+
+    revoked = true;
+
+    const refused = await request(`Bearer ${token}`);
+
+    expect(refused.status).toBe(401);
+    expect(refused.body).toBe('');
+
+  } finally {
+    try {
+      if (server) await server.close();
+    } finally {
+      fs.rmSync(folder, { recursive: true, force: true });
+    }
+  }
+});
