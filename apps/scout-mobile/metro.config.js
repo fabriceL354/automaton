@@ -20,6 +20,8 @@ config.watchFolders = [
 // Limiter les alias aux imports partages effectivement utilises.
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   const aliases = [
+  ['fictional-simulation.ts', './fictional-simulation.js', './fictional-simulation'],
+
     ['research-mobile-preview.ts', './research-evidence-policy.js', './research-evidence-policy'],
     ['research-mobile-preview.ts', './research-data-boundary.js', './research-data-boundary'],
     ['research-reception.ts', './research-mobile-preview.js', './research-mobile-preview'],

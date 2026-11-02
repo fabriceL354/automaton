@@ -1,4 +1,5 @@
 import OpportunitiesScreen from './src/screens/OpportunitiesScreen';
+import SimulationsScreen from './src/screens/SimulationsScreen';
 import ResearchImportsScreen from './src/screens/ResearchImportsScreen';
 import React, { useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -7,9 +8,9 @@ import {
   Pressable, StatusBar, StyleSheet
 } from 'react-native';
 
-type Page = 'Accueil' | 'Opportunités' | 'Projets' | 'Réglages';
+type Page = 'Accueil' | 'Opportunités' | 'Projets' | 'Simulations' | 'Réglages';
 
-const pages: Page[] = ['Accueil', 'Opportunités', 'Projets', 'Réglages'];
+const pages: Page[] = ['Accueil', 'Opportunités', 'Projets', 'Simulations', 'Réglages'];
 
 const exemples = [
   {
@@ -94,6 +95,7 @@ export default function App() {
         {page === 'Accueil' && <ResearchImportsScreen />}
 
         {page === 'Opportunités' && <OpportunitiesScreen />}
+      {page === 'Simulations' && <SimulationsScreen />}
 
         {page === 'Projets' && (
           <View style={styles.card}>
